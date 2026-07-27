@@ -11,6 +11,11 @@ type Department = {
   name: string;
 };
 
+type StaffMember = {
+  username: string;
+  name: string;
+};
+
 export default function NewTicketPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -18,6 +23,8 @@ export default function NewTicketPage() {
   const [description, setDescription] = useState("");
   const [department, setDepartment] = useState("");
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [assignedTo, setAssignedTo] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -35,6 +42,17 @@ export default function NewTicketPage() {
       .catch((e) => setError(e instanceof Error ? e.message : "Não foi possível carregar os departamentos."));
   }, [router]);
 
+  useEffect(() => {
+    setAssignedTo("");
+    if (!department) {
+      setStaff([]);
+      return;
+    }
+    apiJson<StaffMember[]>(`/departments/${department}/staff`)
+      .then(setStaff)
+      .catch(() => setStaff([]));
+  }, [department]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -47,7 +65,7 @@ export default function NewTicketPage() {
       }
       const ticket = await apiJson<{ number: number }>("/tickets", {
         method: "POST",
-        body: JSON.stringify({ subject, description, department, attachment }),
+        body: JSON.stringify({ subject, description, department, assigned_to: assignedTo || undefined, attachment }),
       });
       router.push(`/tickets/${ticket.number}`);
     } catch (e) {
@@ -101,6 +119,27 @@ export default function NewTicketPage() {
               ))}
             </select>
           </div>
+
+          {staff.length > 1 && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>
+                Direcionar para
+              </label>
+              <select
+                value={assignedTo}
+                onChange={(e) => setAssignedTo(e.target.value)}
+                className="w-full px-4 py-3 rounded-lg border text-sm outline-none"
+                style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
+              >
+                <option value="">Qualquer pessoa do departamento</option>
+                {staff.map((s) => (
+                  <option key={s.username} value={s.username}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>

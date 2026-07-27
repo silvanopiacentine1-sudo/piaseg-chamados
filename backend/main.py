@@ -166,6 +166,7 @@ class TicketCreate(BaseModel):
     subject: str
     description: str
     department: str
+    assigned_to: Optional[str] = None
     attachment: Optional[str] = None
 
 
@@ -237,6 +238,10 @@ def _department_staff_usernames(department_id: str) -> list[str]:
         for u in users
         if u.get("role") == "admin" or (u.get("role") == "atendente" and u.get("department") == department_id)
     ]
+
+
+def _admin_usernames() -> list[str]:
+    return [u["username"] for u in auth.load_users() if u.get("role") == "admin"]
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +433,17 @@ def list_departments(user: dict = Depends(get_current_user)):
     return sorted(_load_departments(), key=lambda d: d["name"])
 
 
+@app.get("/departments/{department_id}/staff")
+def list_department_staff(department_id: str, user: dict = Depends(get_current_user)):
+    _department_or_404(department_id)
+    atendentes = [
+        {"username": u["username"], "name": u["name"]}
+        for u in auth.load_users()
+        if u.get("role") == "atendente" and u.get("department") == department_id
+    ]
+    return sorted(atendentes, key=lambda u: u["name"])
+
+
 @app.post("/admin/departments", status_code=201)
 def create_department(body: DepartmentCreate, user: dict = Depends(require_admin)):
     name = body.name.strip()
@@ -527,6 +543,15 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Assunto e descrição são obrigatórios")
     department = _department_or_404(body.department)
 
+    assigned_to = None
+    assigned_to_name = None
+    if body.assigned_to:
+        target_user = next((u for u in auth.load_users() if u["username"] == body.assigned_to), None)
+        if not target_user or target_user.get("role") != "atendente" or target_user.get("department") != department["id"]:
+            raise HTTPException(status_code=400, detail="Esse atendente não pertence ao departamento escolhido")
+        assigned_to = target_user["username"]
+        assigned_to_name = target_user["name"]
+
     ticket = {
         "id": f"tkt_{uuid.uuid4().hex[:8]}",
         "number": _next_ticket_number(),
@@ -537,8 +562,8 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         "department_name": department["name"],
         "opened_by": user["sub"],
         "opened_by_name": user["name"],
-        "assigned_to": None,
-        "assigned_to_name": None,
+        "assigned_to": assigned_to,
+        "assigned_to_name": assigned_to_name,
         "attachment": body.attachment,
         "created_at": now_iso(),
         "updated_at": now_iso(),
@@ -549,8 +574,9 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
     }
     _save_ticket(ticket)
 
+    recipients = list({assigned_to, *_admin_usernames()}) if assigned_to else _department_staff_usernames(department["id"])
     _notify_many(
-        _department_staff_usernames(department["id"]),
+        recipients,
         f"Novo chamado de {user['name']} — {department['name']}",
         [f"<strong>Assunto:</strong> {ticket['subject']}", ticket["description"]],
         ticket["number"],
