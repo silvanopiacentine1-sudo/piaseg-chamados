@@ -1,0 +1,536 @@
+import json
+import os
+import secrets
+import smtplib
+import uuid
+from datetime import datetime, timedelta, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from pathlib import Path
+from typing import Optional
+
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
+
+load_dotenv()
+
+import auth
+
+app = FastAPI(title="Piaseg Chamados")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+APP_DIR = Path(__file__).parent
+DATA_DIR = Path(os.getenv("DATA_DIR", str(APP_DIR)))
+FILES_DIR = DATA_DIR / "files"
+FILES_DIR.mkdir(parents=True, exist_ok=True)
+
+TICKETS_FILE = DATA_DIR / "tickets.json"
+MESSAGES_FILE = DATA_DIR / "messages.json"
+RESETS_FILE = DATA_DIR / "password_resets.json"
+
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".xls", ".xlsx", ".zip"}
+MAX_FILE_SIZE = 15 * 1024 * 1024  # 15MB
+
+SMTP_HOST = os.getenv("SMTP_HOST", "email02.webplusidc.com.br")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USER = os.getenv("SMTP_USER", "franchising@piaseg.com.br")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "franchising@piaseg.com.br")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://piaseg-chamados.vercel.app")
+RESET_TOKEN_TTL_HOURS = 1
+
+STATUSES = {"aberto", "em_andamento", "encerrado"}
+
+
+def _load(path: Path) -> list:
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return []
+
+
+def _save(path: Path, data: list) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Auth dependencies
+# ---------------------------------------------------------------------------
+
+bearer = HTTPBearer()
+
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer)) -> dict:
+    payload = auth.decode_token(credentials.credentials)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido ou expirado")
+    return payload
+
+
+def require_staff(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") not in ("atendente", "admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso restrito ao time interno")
+    return user
+
+
+def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso restrito a administradores")
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserCreate(BaseModel):
+    username: str
+    name: str
+    password: str
+    role: str = "franqueado"
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    username: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class TicketCreate(BaseModel):
+    subject: str
+    description: str
+    attachment: Optional[str] = None
+
+
+class MessageCreate(BaseModel):
+    text: str
+    attachment: Optional[str] = None
+
+
+class AssignRequest(BaseModel):
+    username: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Email helpers
+# ---------------------------------------------------------------------------
+
+def _send_email(to: str, subject: str, html_body: str) -> None:
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = to
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as server:
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(EMAIL_FROM, [to], msg.as_string())
+
+
+def _notify(to: str, title: str, body_lines: list[str], ticket_number: int) -> None:
+    body_html = "".join(f"<p style='margin:0 0 12px;'>{line}</p>" for line in body_lines)
+    html = f"""
+    <div style="font-family: Arial, Helvetica, sans-serif; max-width: 480px; margin: 0 auto;">
+      <div style="background:#072a3c; padding: 24px; text-align:center;">
+        <h1 style="color:#c2a360; font-size:20px; margin:0;">Piaseg Chamados</h1>
+      </div>
+      <div style="padding: 24px; color:#111;">
+        <h2 style="font-size:16px; margin:0 0 16px;">{title}</h2>
+        {body_html}
+        <p style="text-align:center; margin: 24px 0;">
+          <a href="{FRONTEND_URL}/tickets/{ticket_number}" style="background:#072a3c; color:#ffffff; padding:12px 24px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+            Abrir chamado #{ticket_number:04d}
+          </a>
+        </p>
+      </div>
+    </div>
+    """
+    try:
+        _send_email(to, f"[Chamado #{ticket_number:04d}] {title}", html)
+    except Exception:
+        pass  # notificação por e-mail é best-effort, não deve derrubar a operação
+
+
+def _notify_many(usernames: list[str], title: str, body_lines: list[str], ticket_number: int) -> None:
+    for u in set(usernames):
+        _notify(u, title, body_lines, ticket_number)
+
+
+def _staff_usernames() -> list[str]:
+    return [u["username"] for u in auth.load_users() if u.get("role") in ("atendente", "admin")]
+
+
+# ---------------------------------------------------------------------------
+# Ticket helpers
+# ---------------------------------------------------------------------------
+
+def _ticket_or_404(ticket_id: str) -> dict:
+    tickets = _load(TICKETS_FILE)
+    for t in tickets:
+        if t["id"] == ticket_id:
+            return t
+    raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+def _save_ticket(ticket: dict) -> None:
+    tickets = _load(TICKETS_FILE)
+    for i, t in enumerate(tickets):
+        if t["id"] == ticket["id"]:
+            tickets[i] = ticket
+            _save(TICKETS_FILE, tickets)
+            return
+    tickets.append(ticket)
+    _save(TICKETS_FILE, tickets)
+
+
+def _next_ticket_number() -> int:
+    tickets = _load(TICKETS_FILE)
+    return max((t["number"] for t in tickets), default=0) + 1
+
+
+def _require_ticket_access(ticket: dict, user: dict) -> None:
+    if user.get("role") in ("atendente", "admin"):
+        return
+    if ticket["opened_by"] == user["sub"]:
+        return
+    raise HTTPException(status_code=403, detail="Você não tem acesso a este chamado")
+
+
+def _messages_for_ticket(ticket_id: str) -> list[dict]:
+    messages = _load(MESSAGES_FILE)
+    return sorted([m for m in messages if m["ticket_id"] == ticket_id], key=lambda m: m["created_at"])
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/login")
+def login(body: LoginRequest):
+    user = auth.authenticate(body.username, body.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
+    role = user.get("role", "franqueado")
+    token = auth.create_token(user["username"], user["name"], role)
+    return {"token": token, "name": user["name"], "role": role, "username": user["username"]}
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(body: ForgotPasswordRequest):
+    users = auth.load_users()
+    user = next((u for u in users if u["username"] == body.username), None)
+    if user:
+        token = secrets.token_urlsafe(32)
+        resets = _load(RESETS_FILE)
+        resets.append({
+            "token": token,
+            "username": user["username"],
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=RESET_TOKEN_TTL_HOURS)).isoformat(),
+            "used": False,
+        })
+        _save(RESETS_FILE, resets)
+        reset_link = f"{FRONTEND_URL}/reset-password?token={token}"
+        html = f"""
+        <div style="font-family: Arial, Helvetica, sans-serif; max-width: 480px; margin: 0 auto;">
+          <div style="background:#072a3c; padding: 24px; text-align:center;">
+            <h1 style="color:#c2a360; font-size:20px; margin:0;">Piaseg Chamados</h1>
+          </div>
+          <div style="padding: 24px; color:#111;">
+            <p>Olá, {user["name"]},</p>
+            <p>Recebemos uma solicitação para redefinir sua senha no Piaseg Chamados.</p>
+            <p style="text-align:center; margin: 32px 0;">
+              <a href="{reset_link}" style="background:#072a3c; color:#ffffff; padding:12px 24px; border-radius:8px; text-decoration:none; font-weight:bold; display:inline-block;">
+                Redefinir senha
+              </a>
+            </p>
+            <p style="font-size:13px; color:#555;">
+              Esse link expira em {RESET_TOKEN_TTL_HOURS} hora(s). Se você não pediu essa redefinição, pode ignorar este e-mail.
+            </p>
+          </div>
+        </div>
+        """
+        try:
+            _send_email(user["username"], "Redefinição de senha — Piaseg Chamados", html)
+        except Exception:
+            pass
+    return {"message": "Se o usuário existir, enviamos um e-mail com instruções de redefinição."}
+
+
+@app.post("/auth/reset-password")
+def reset_password(body: ResetPasswordRequest):
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=400, detail="A senha deve ter pelo menos 6 caracteres")
+
+    resets = _load(RESETS_FILE)
+    entry = next((r for r in resets if r["token"] == body.token), None)
+    if not entry or entry["used"]:
+        raise HTTPException(status_code=400, detail="Link inválido ou já utilizado")
+    if datetime.fromisoformat(entry["expires_at"]) < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Link expirado. Solicite uma nova redefinição.")
+
+    result = auth.update_user(entry["username"], password=body.new_password)
+    if not result:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    entry["used"] = True
+    _save(RESETS_FILE, resets)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Users (admin)
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/users")
+def list_users(user: dict = Depends(require_admin)):
+    return [{"username": u["username"], "name": u["name"], "role": u.get("role", "franqueado")} for u in auth.load_users()]
+
+
+@app.post("/admin/users", status_code=201)
+def create_user_endpoint(body: UserCreate, user: dict = Depends(require_admin)):
+    try:
+        return auth.create_user(body.username, body.name, body.password, body.role)
+    except ValueError as e:
+        raise HTTPException(status_code=409 if "já existe" in str(e) else 400, detail=str(e))
+
+
+@app.put("/admin/users/{username}")
+def update_user_endpoint(username: str, body: UserUpdate, user: dict = Depends(require_admin)):
+    try:
+        result = auth.update_user(username, body.name, body.password, body.role)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not result:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    return result
+
+
+@app.delete("/admin/users/{username}")
+def delete_user_endpoint(username: str, user: dict = Depends(require_admin)):
+    if not auth.delete_user(username):
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# File upload
+# ---------------------------------------------------------------------------
+
+@app.post("/tickets/upload")
+async def upload_file(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    original_name = os.path.basename(file.filename or "")
+    ext = Path(original_name).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Tipo de arquivo não permitido. Use: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="Arquivo muito grande (máximo 15MB)")
+    stored_name = f"{uuid.uuid4().hex[:8]}_{original_name}"
+    dest = FILES_DIR / stored_name
+    dest.write_bytes(content)
+    return {"filename": stored_name, "original_name": original_name}
+
+
+@app.get("/files/{filename}")
+def get_file(filename: str, user: dict = Depends(get_current_user)):
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nome de arquivo inválido")
+    file_path = FILES_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    display_name = filename.split("_", 1)[1] if "_" in filename else filename
+    return FileResponse(file_path, filename=display_name)
+
+
+# ---------------------------------------------------------------------------
+# Tickets
+# ---------------------------------------------------------------------------
+
+@app.get("/tickets")
+def list_tickets(status_filter: Optional[str] = None, user: dict = Depends(get_current_user)):
+    tickets = _load(TICKETS_FILE)
+    if user.get("role") not in ("atendente", "admin"):
+        tickets = [t for t in tickets if t["opened_by"] == user["sub"]]
+    if status_filter:
+        if status_filter not in STATUSES:
+            raise HTTPException(status_code=400, detail=f"status deve ser um de {sorted(STATUSES)}")
+        tickets = [t for t in tickets if t["status"] == status_filter]
+    return sorted(tickets, key=lambda t: t["number"], reverse=True)
+
+
+@app.post("/tickets", status_code=201)
+def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
+    if user.get("role") != "franqueado":
+        raise HTTPException(status_code=403, detail="Apenas franqueados podem abrir chamados")
+    if not body.subject.strip() or not body.description.strip():
+        raise HTTPException(status_code=400, detail="Assunto e descrição são obrigatórios")
+
+    ticket = {
+        "id": f"tkt_{uuid.uuid4().hex[:8]}",
+        "number": _next_ticket_number(),
+        "subject": body.subject.strip(),
+        "description": body.description.strip(),
+        "status": "aberto",
+        "opened_by": user["sub"],
+        "opened_by_name": user["name"],
+        "assigned_to": None,
+        "assigned_to_name": None,
+        "attachment": body.attachment,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "closed_at": None,
+        "closed_by": None,
+    }
+    _save_ticket(ticket)
+
+    _notify_many(
+        _staff_usernames(),
+        f"Novo chamado de {user['name']}",
+        [f"<strong>Assunto:</strong> {ticket['subject']}", ticket["description"]],
+        ticket["number"],
+    )
+    return ticket
+
+
+@app.get("/tickets/{number}")
+def get_ticket(number: int, user: dict = Depends(get_current_user)):
+    tickets = _load(TICKETS_FILE)
+    ticket = next((t for t in tickets if t["number"] == number), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    _require_ticket_access(ticket, user)
+    return {**ticket, "messages": _messages_for_ticket(ticket["id"])}
+
+
+@app.post("/tickets/{number}/messages", status_code=201)
+def add_message(number: int, body: MessageCreate, user: dict = Depends(get_current_user)):
+    tickets = _load(TICKETS_FILE)
+    ticket = next((t for t in tickets if t["number"] == number), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    _require_ticket_access(ticket, user)
+    if ticket["status"] == "encerrado":
+        raise HTTPException(status_code=409, detail="Chamado encerrado — não é possível enviar novas mensagens")
+    if not body.text.strip() and not body.attachment:
+        raise HTTPException(status_code=400, detail="Envie um texto ou anexo")
+
+    message = {
+        "id": f"msg_{uuid.uuid4().hex[:8]}",
+        "ticket_id": ticket["id"],
+        "author": user["sub"],
+        "author_name": user["name"],
+        "author_role": user["role"],
+        "text": body.text.strip(),
+        "attachment": body.attachment,
+        "created_at": now_iso(),
+    }
+    messages = _load(MESSAGES_FILE)
+    messages.append(message)
+    _save(MESSAGES_FILE, messages)
+
+    is_staff = user["role"] in ("atendente", "admin")
+    if is_staff and ticket["status"] == "aberto":
+        ticket["status"] = "em_andamento"
+    ticket["updated_at"] = now_iso()
+    _save_ticket(ticket)
+
+    if is_staff:
+        _notify(ticket["opened_by"], f"Nova resposta de {user['name']}", [message["text"] or "(anexo enviado)"], number)
+    else:
+        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _staff_usernames()
+        _notify_many(recipients, f"Nova mensagem de {user['name']}", [message["text"] or "(anexo enviado)"], number)
+
+    return message
+
+
+@app.post("/tickets/{number}/assign")
+def assign_ticket(number: int, body: AssignRequest, user: dict = Depends(require_staff)):
+    tickets = _load(TICKETS_FILE)
+    ticket = next((t for t in tickets if t["number"] == number), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+    target_username = body.username
+    if target_username and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Apenas administradores podem atribuir chamados a terceiros")
+
+    if target_username:
+        target_user = next((u for u in auth.load_users() if u["username"] == target_username), None)
+        if not target_user or target_user.get("role") not in ("atendente", "admin"):
+            raise HTTPException(status_code=400, detail="Usuário indicado não é do time interno")
+        ticket["assigned_to"] = target_user["username"]
+        ticket["assigned_to_name"] = target_user["name"]
+    else:
+        ticket["assigned_to"] = user["sub"]
+        ticket["assigned_to_name"] = user["name"]
+
+    if ticket["status"] == "aberto":
+        ticket["status"] = "em_andamento"
+    ticket["updated_at"] = now_iso()
+    _save_ticket(ticket)
+    return ticket
+
+
+@app.post("/tickets/{number}/close")
+def close_ticket(number: int, user: dict = Depends(get_current_user)):
+    tickets = _load(TICKETS_FILE)
+    ticket = next((t for t in tickets if t["number"] == number), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    _require_ticket_access(ticket, user)
+    if ticket["status"] == "encerrado":
+        raise HTTPException(status_code=409, detail="Chamado já está encerrado")
+
+    ticket["status"] = "encerrado"
+    ticket["closed_at"] = now_iso()
+    ticket["closed_by"] = user["sub"]
+    ticket["updated_at"] = now_iso()
+    _save_ticket(ticket)
+
+    is_staff = user["role"] in ("atendente", "admin")
+    if is_staff:
+        _notify(ticket["opened_by"], f"Chamado encerrado por {user['name']}", ["O chamado foi marcado como encerrado."], number)
+    else:
+        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _staff_usernames()
+        _notify_many(recipients, f"Chamado encerrado por {user['name']}", ["O franqueado encerrou o chamado."], number)
+
+    return ticket
