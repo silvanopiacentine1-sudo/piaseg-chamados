@@ -271,7 +271,7 @@ def _require_ticket_access(ticket: dict, user: dict) -> None:
     if role == "admin":
         return
     if role == "atendente":
-        if ticket["department"] == user.get("department") or ticket.get("assigned_to") == user["sub"]:
+        if ticket.get("department") == user.get("department") or ticket.get("assigned_to") == user["sub"]:
             return
         raise HTTPException(status_code=403, detail="Este chamado não pertence ao seu departamento")
     if ticket["opened_by"] == user["sub"]:
@@ -511,7 +511,7 @@ def list_tickets(status_filter: Optional[str] = None, user: dict = Depends(get_c
     if role == "franqueado":
         tickets = [t for t in tickets if t["opened_by"] == user["sub"]]
     elif role == "atendente":
-        tickets = [t for t in tickets if t["department"] == user.get("department") or t.get("assigned_to") == user["sub"]]
+        tickets = [t for t in tickets if t.get("department") == user.get("department") or t.get("assigned_to") == user["sub"]]
     if status_filter:
         if status_filter not in STATUSES:
             raise HTTPException(status_code=400, detail=f"status deve ser um de {sorted(STATUSES)}")
@@ -603,7 +603,7 @@ def add_message(number: int, body: MessageCreate, user: dict = Depends(get_curre
     if is_staff:
         _notify(ticket["opened_by"], f"Nova resposta de {user['name']}", [message["text"] or "(anexo enviado)"], number)
     else:
-        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket["department"])
+        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket.get("department"))
         _notify_many(recipients, f"Nova mensagem de {user['name']}", [message["text"] or "(anexo enviado)"], number)
 
     return message
@@ -624,12 +624,12 @@ def assign_ticket(number: int, body: AssignRequest, user: dict = Depends(require
         target_user = next((u for u in auth.load_users() if u["username"] == target_username), None)
         if not target_user or target_user.get("role") not in ("atendente", "admin"):
             raise HTTPException(status_code=400, detail="Usuário indicado não é do time interno")
-        if target_user.get("role") == "atendente" and target_user.get("department") != ticket["department"]:
+        if target_user.get("role") == "atendente" and target_user.get("department") != ticket.get("department"):
             raise HTTPException(status_code=400, detail="Esse atendente não pertence ao departamento do chamado")
         ticket["assigned_to"] = target_user["username"]
         ticket["assigned_to_name"] = target_user["name"]
     else:
-        if user["role"] == "atendente" and user.get("department") != ticket["department"]:
+        if user["role"] == "atendente" and user.get("department") != ticket.get("department"):
             raise HTTPException(status_code=403, detail="Este chamado não pertence ao seu departamento")
         ticket["assigned_to"] = user["sub"]
         ticket["assigned_to_name"] = user["name"]
@@ -651,7 +651,7 @@ def redirect_ticket(number: int, body: RedirectRequest, user: dict = Depends(req
         raise HTTPException(status_code=409, detail="Chamado encerrado — não é possível redirecionar")
 
     department = _department_or_404(body.department)
-    if department["id"] == ticket["department"]:
+    if department["id"] == ticket.get("department"):
         raise HTTPException(status_code=400, detail="O chamado já está nesse departamento")
 
     ticket["department"] = department["id"]
@@ -691,7 +691,7 @@ def close_ticket(number: int, user: dict = Depends(get_current_user)):
     if is_staff:
         _notify(ticket["opened_by"], f"Chamado encerrado por {user['name']}", ["O chamado foi marcado como encerrado."], number)
     else:
-        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket["department"])
+        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket.get("department"))
         _notify_many(recipients, f"Chamado encerrado por {user['name']}", ["O franqueado encerrou o chamado."], number)
 
     return ticket
