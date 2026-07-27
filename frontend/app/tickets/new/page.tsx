@@ -120,7 +120,7 @@ export default function NewTicketPage() {
             </select>
           </div>
 
-          {staff.length > 1 && (
+          {staff.length > 0 && (
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>
                 Direcionar para
