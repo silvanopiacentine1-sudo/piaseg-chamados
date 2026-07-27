@@ -6,17 +6,33 @@ import { apiJson, uploadFile } from "../../lib/api";
 import { getToken } from "../../lib/auth";
 import Header from "../../components/Header";
 
+type Department = {
+  id: string;
+  name: string;
+};
+
 export default function NewTicketPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
+  const [department, setDepartment] = useState("");
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!getToken()) router.push("/");
+    if (!getToken()) {
+      router.push("/");
+      return;
+    }
+    apiJson<Department[]>("/departments")
+      .then((data) => {
+        setDepartments(data);
+        if (data.length > 0) setDepartment(data[0].id);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Não foi possível carregar os departamentos."));
   }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -31,7 +47,7 @@ export default function NewTicketPage() {
       }
       const ticket = await apiJson<{ number: number }>("/tickets", {
         method: "POST",
-        body: JSON.stringify({ subject, description, attachment }),
+        body: JSON.stringify({ subject, description, department, attachment }),
       });
       router.push(`/tickets/${ticket.number}`);
     } catch (e) {
@@ -64,6 +80,26 @@ export default function NewTicketPage() {
               className="w-full px-4 py-3 rounded-lg border text-sm outline-none"
               style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
             />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>
+              Departamento
+            </label>
+            <select
+              value={department}
+              onChange={(e) => setDepartment(e.target.value)}
+              required
+              className="w-full px-4 py-3 rounded-lg border text-sm outline-none"
+              style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
+            >
+              {departments.length === 0 && <option value="">Carregando...</option>}
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -102,7 +138,7 @@ export default function NewTicketPage() {
           <div className="flex gap-3 mt-2">
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !department}
               className="px-6 py-3 rounded-lg text-white font-semibold text-sm disabled:opacity-60"
               style={{ background: "linear-gradient(135deg, #072a3c 0%, #123a52 100%)" }}
             >

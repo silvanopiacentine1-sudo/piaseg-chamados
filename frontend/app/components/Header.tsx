@@ -21,9 +21,14 @@ export default function Header() {
         <nav className="flex items-center gap-4 text-sm">
           <span className="hidden sm:inline text-white/70">{getName()}</span>
           {isAdmin() && (
-            <Link href="/admin/users" className="text-white/90 hover:text-white font-semibold">
-              Usuários
-            </Link>
+            <>
+              <Link href="/admin/departments" className="text-white/90 hover:text-white font-semibold">
+                Departamentos
+              </Link>
+              <Link href="/admin/users" className="text-white/90 hover:text-white font-semibold">
+                Usuários
+              </Link>
+            </>
           )}
           {isStaff() && (
             <Link href="/tickets" className="text-white/90 hover:text-white font-semibold">

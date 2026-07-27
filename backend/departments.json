@@ -1,0 +1,6 @@
+[
+  { "id": "comercial", "name": "Comercial" },
+  { "id": "operacional", "name": "Operacional" },
+  { "id": "marketing", "name": "Marketing" },
+  { "id": "administrativo", "name": "Administrativo" }
+]

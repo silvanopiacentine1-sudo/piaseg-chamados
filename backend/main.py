@@ -1,7 +1,9 @@
 import json
 import os
+import re
 import secrets
 import smtplib
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -41,9 +43,13 @@ FILES_DIR.mkdir(parents=True, exist_ok=True)
 TICKETS_FILE = DATA_DIR / "tickets.json"
 MESSAGES_FILE = DATA_DIR / "messages.json"
 RESETS_FILE = DATA_DIR / "password_resets.json"
+DEPARTMENTS_FILE = DATA_DIR / "departments.json"
+_BUNDLED_DEPARTMENTS_FILE = APP_DIR / "departments.json"
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".xls", ".xlsx", ".zip"}
 MAX_FILE_SIZE = 15 * 1024 * 1024  # 15MB
+
+RATINGS = {"ruim", "bom", "excelente"}
 
 SMTP_HOST = os.getenv("SMTP_HOST", "email02.webplusidc.com.br")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
@@ -69,6 +75,24 @@ def _save(path: Path, data: list) -> None:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _load_departments() -> list[dict]:
+    if DEPARTMENTS_FILE.exists():
+        return json.loads(DEPARTMENTS_FILE.read_text(encoding="utf-8"))
+    if _BUNDLED_DEPARTMENTS_FILE.exists():
+        return json.loads(_BUNDLED_DEPARTMENTS_FILE.read_text(encoding="utf-8"))
+    return []
+
+
+def _save_departments(departments: list[dict]) -> None:
+    _save(DEPARTMENTS_FILE, departments)
+
+
+def _slugify(name: str) -> str:
+    normalized = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", normalized.lower()).strip("-")
+    return slug or uuid.uuid4().hex[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -111,12 +135,22 @@ class UserCreate(BaseModel):
     name: str
     password: str
     role: str = "franqueado"
+    department: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     password: Optional[str] = None
     role: Optional[str] = None
+    department: Optional[str] = None
+
+
+class DepartmentCreate(BaseModel):
+    name: str
+
+
+class DepartmentUpdate(BaseModel):
+    name: str
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -131,6 +165,7 @@ class ResetPasswordRequest(BaseModel):
 class TicketCreate(BaseModel):
     subject: str
     description: str
+    department: str
     attachment: Optional[str] = None
 
 
@@ -141,6 +176,14 @@ class MessageCreate(BaseModel):
 
 class AssignRequest(BaseModel):
     username: Optional[str] = None
+
+
+class RedirectRequest(BaseModel):
+    department: str
+
+
+class RatingRequest(BaseModel):
+    rating: str
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +230,13 @@ def _notify_many(usernames: list[str], title: str, body_lines: list[str], ticket
         _notify(u, title, body_lines, ticket_number)
 
 
-def _staff_usernames() -> list[str]:
-    return [u["username"] for u in auth.load_users() if u.get("role") in ("atendente", "admin")]
+def _department_staff_usernames(department_id: str) -> list[str]:
+    users = auth.load_users()
+    return [
+        u["username"]
+        for u in users
+        if u.get("role") == "admin" or (u.get("role") == "atendente" and u.get("department") == department_id)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -219,11 +267,23 @@ def _next_ticket_number() -> int:
 
 
 def _require_ticket_access(ticket: dict, user: dict) -> None:
-    if user.get("role") in ("atendente", "admin"):
+    role = user.get("role")
+    if role == "admin":
         return
+    if role == "atendente":
+        if ticket["department"] == user.get("department") or ticket.get("assigned_to") == user["sub"]:
+            return
+        raise HTTPException(status_code=403, detail="Este chamado não pertence ao seu departamento")
     if ticket["opened_by"] == user["sub"]:
         return
     raise HTTPException(status_code=403, detail="Você não tem acesso a este chamado")
+
+
+def _department_or_404(department_id: str) -> dict:
+    department = next((d for d in _load_departments() if d["id"] == department_id), None)
+    if not department:
+        raise HTTPException(status_code=400, detail="Departamento inválido")
+    return department
 
 
 def _messages_for_ticket(ticket_id: str) -> list[dict]:
@@ -250,8 +310,9 @@ def login(body: LoginRequest):
     if not user:
         raise HTTPException(status_code=401, detail="Usuário ou senha inválidos")
     role = user.get("role", "franqueado")
-    token = auth.create_token(user["username"], user["name"], role)
-    return {"token": token, "name": user["name"], "role": role, "username": user["username"]}
+    department = user.get("department")
+    token = auth.create_token(user["username"], user["name"], role, department)
+    return {"token": token, "name": user["name"], "role": role, "username": user["username"], "department": department}
 
 
 @app.post("/auth/forgot-password")
@@ -322,21 +383,28 @@ def reset_password(body: ResetPasswordRequest):
 
 @app.get("/admin/users")
 def list_users(user: dict = Depends(require_admin)):
-    return [{"username": u["username"], "name": u["name"], "role": u.get("role", "franqueado")} for u in auth.load_users()]
+    return [
+        {"username": u["username"], "name": u["name"], "role": u.get("role", "franqueado"), "department": u.get("department")}
+        for u in auth.load_users()
+    ]
 
 
 @app.post("/admin/users", status_code=201)
 def create_user_endpoint(body: UserCreate, user: dict = Depends(require_admin)):
+    if body.role == "atendente" and body.department:
+        _department_or_404(body.department)
     try:
-        return auth.create_user(body.username, body.name, body.password, body.role)
+        return auth.create_user(body.username, body.name, body.password, body.role, body.department)
     except ValueError as e:
         raise HTTPException(status_code=409 if "já existe" in str(e) else 400, detail=str(e))
 
 
 @app.put("/admin/users/{username}")
 def update_user_endpoint(username: str, body: UserUpdate, user: dict = Depends(require_admin)):
+    if body.department:
+        _department_or_404(body.department)
     try:
-        result = auth.update_user(username, body.name, body.password, body.role)
+        result = auth.update_user(username, body.name, body.password, body.role, body.department)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not result:
@@ -348,6 +416,57 @@ def update_user_endpoint(username: str, body: UserUpdate, user: dict = Depends(r
 def delete_user_endpoint(username: str, user: dict = Depends(require_admin)):
     if not auth.delete_user(username):
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Departments
+# ---------------------------------------------------------------------------
+
+@app.get("/departments")
+def list_departments(user: dict = Depends(get_current_user)):
+    return sorted(_load_departments(), key=lambda d: d["name"])
+
+
+@app.post("/admin/departments", status_code=201)
+def create_department(body: DepartmentCreate, user: dict = Depends(require_admin)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nome é obrigatório")
+    departments = _load_departments()
+    dept_id = _slugify(name)
+    if any(d["id"] == dept_id for d in departments):
+        raise HTTPException(status_code=409, detail="Já existe um departamento com esse nome")
+    department = {"id": dept_id, "name": name}
+    departments.append(department)
+    _save_departments(departments)
+    return department
+
+
+@app.put("/admin/departments/{department_id}")
+def update_department(department_id: str, body: DepartmentUpdate, user: dict = Depends(require_admin)):
+    departments = _load_departments()
+    department = next((d for d in departments if d["id"] == department_id), None)
+    if not department:
+        raise HTTPException(status_code=404, detail="Departamento não encontrado")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nome é obrigatório")
+    department["name"] = name
+    _save_departments(departments)
+    return department
+
+
+@app.delete("/admin/departments/{department_id}")
+def delete_department(department_id: str, user: dict = Depends(require_admin)):
+    users_in_department = [u for u in auth.load_users() if u.get("department") == department_id]
+    if users_in_department:
+        raise HTTPException(status_code=409, detail="Realoque os atendentes desse departamento antes de excluí-lo")
+    departments = _load_departments()
+    filtered = [d for d in departments if d["id"] != department_id]
+    if len(filtered) == len(departments):
+        raise HTTPException(status_code=404, detail="Departamento não encontrado")
+    _save_departments(filtered)
     return {"ok": True}
 
 
@@ -388,8 +507,11 @@ def get_file(filename: str, user: dict = Depends(get_current_user)):
 @app.get("/tickets")
 def list_tickets(status_filter: Optional[str] = None, user: dict = Depends(get_current_user)):
     tickets = _load(TICKETS_FILE)
-    if user.get("role") not in ("atendente", "admin"):
+    role = user.get("role")
+    if role == "franqueado":
         tickets = [t for t in tickets if t["opened_by"] == user["sub"]]
+    elif role == "atendente":
+        tickets = [t for t in tickets if t["department"] == user.get("department") or t.get("assigned_to") == user["sub"]]
     if status_filter:
         if status_filter not in STATUSES:
             raise HTTPException(status_code=400, detail=f"status deve ser um de {sorted(STATUSES)}")
@@ -403,6 +525,7 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Apenas franqueados podem abrir chamados")
     if not body.subject.strip() or not body.description.strip():
         raise HTTPException(status_code=400, detail="Assunto e descrição são obrigatórios")
+    department = _department_or_404(body.department)
 
     ticket = {
         "id": f"tkt_{uuid.uuid4().hex[:8]}",
@@ -410,6 +533,8 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         "subject": body.subject.strip(),
         "description": body.description.strip(),
         "status": "aberto",
+        "department": department["id"],
+        "department_name": department["name"],
         "opened_by": user["sub"],
         "opened_by_name": user["name"],
         "assigned_to": None,
@@ -419,12 +544,14 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         "updated_at": now_iso(),
         "closed_at": None,
         "closed_by": None,
+        "rating": None,
+        "rated_at": None,
     }
     _save_ticket(ticket)
 
     _notify_many(
-        _staff_usernames(),
-        f"Novo chamado de {user['name']}",
+        _department_staff_usernames(department["id"]),
+        f"Novo chamado de {user['name']} — {department['name']}",
         [f"<strong>Assunto:</strong> {ticket['subject']}", ticket["description"]],
         ticket["number"],
     )
@@ -476,7 +603,7 @@ def add_message(number: int, body: MessageCreate, user: dict = Depends(get_curre
     if is_staff:
         _notify(ticket["opened_by"], f"Nova resposta de {user['name']}", [message["text"] or "(anexo enviado)"], number)
     else:
-        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _staff_usernames()
+        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket["department"])
         _notify_many(recipients, f"Nova mensagem de {user['name']}", [message["text"] or "(anexo enviado)"], number)
 
     return message
@@ -497,9 +624,13 @@ def assign_ticket(number: int, body: AssignRequest, user: dict = Depends(require
         target_user = next((u for u in auth.load_users() if u["username"] == target_username), None)
         if not target_user or target_user.get("role") not in ("atendente", "admin"):
             raise HTTPException(status_code=400, detail="Usuário indicado não é do time interno")
+        if target_user.get("role") == "atendente" and target_user.get("department") != ticket["department"]:
+            raise HTTPException(status_code=400, detail="Esse atendente não pertence ao departamento do chamado")
         ticket["assigned_to"] = target_user["username"]
         ticket["assigned_to_name"] = target_user["name"]
     else:
+        if user["role"] == "atendente" and user.get("department") != ticket["department"]:
+            raise HTTPException(status_code=403, detail="Este chamado não pertence ao seu departamento")
         ticket["assigned_to"] = user["sub"]
         ticket["assigned_to_name"] = user["name"]
 
@@ -507,6 +638,36 @@ def assign_ticket(number: int, body: AssignRequest, user: dict = Depends(require
         ticket["status"] = "em_andamento"
     ticket["updated_at"] = now_iso()
     _save_ticket(ticket)
+    return ticket
+
+
+@app.post("/tickets/{number}/redirect")
+def redirect_ticket(number: int, body: RedirectRequest, user: dict = Depends(require_staff)):
+    tickets = _load(TICKETS_FILE)
+    ticket = next((t for t in tickets if t["number"] == number), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    if ticket["status"] == "encerrado":
+        raise HTTPException(status_code=409, detail="Chamado encerrado — não é possível redirecionar")
+
+    department = _department_or_404(body.department)
+    if department["id"] == ticket["department"]:
+        raise HTTPException(status_code=400, detail="O chamado já está nesse departamento")
+
+    ticket["department"] = department["id"]
+    ticket["department_name"] = department["name"]
+    ticket["assigned_to"] = None
+    ticket["assigned_to_name"] = None
+    ticket["status"] = "aberto"
+    ticket["updated_at"] = now_iso()
+    _save_ticket(ticket)
+
+    _notify_many(
+        _department_staff_usernames(department["id"]),
+        f"Chamado redirecionado para {department['name']}",
+        [f"{user['name']} redirecionou este chamado para o seu departamento."],
+        number,
+    )
     return ticket
 
 
@@ -530,7 +691,29 @@ def close_ticket(number: int, user: dict = Depends(get_current_user)):
     if is_staff:
         _notify(ticket["opened_by"], f"Chamado encerrado por {user['name']}", ["O chamado foi marcado como encerrado."], number)
     else:
-        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _staff_usernames()
+        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket["department"])
         _notify_many(recipients, f"Chamado encerrado por {user['name']}", ["O franqueado encerrou o chamado."], number)
 
+    return ticket
+
+
+@app.post("/tickets/{number}/rating")
+def rate_ticket(number: int, body: RatingRequest, user: dict = Depends(get_current_user)):
+    if user.get("role") != "franqueado":
+        raise HTTPException(status_code=403, detail="Apenas o franqueado que abriu o chamado pode avaliá-lo")
+    if body.rating not in RATINGS:
+        raise HTTPException(status_code=400, detail=f"rating deve ser um de {sorted(RATINGS)}")
+
+    tickets = _load(TICKETS_FILE)
+    ticket = next((t for t in tickets if t["number"] == number), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    if ticket["opened_by"] != user["sub"]:
+        raise HTTPException(status_code=403, detail="Você não abriu este chamado")
+    if ticket["status"] != "encerrado":
+        raise HTTPException(status_code=409, detail="Só é possível avaliar um chamado encerrado")
+
+    ticket["rating"] = body.rating
+    ticket["rated_at"] = now_iso()
+    _save_ticket(ticket)
     return ticket

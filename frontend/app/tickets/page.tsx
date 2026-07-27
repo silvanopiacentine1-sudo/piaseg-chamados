@@ -12,6 +12,7 @@ type Ticket = {
   number: number;
   subject: string;
   status: string;
+  department_name: string;
   opened_by_name: string;
   assigned_to_name: string | null;
   created_at: string;
@@ -119,6 +120,12 @@ export default function TicketsPage() {
                       #{String(t.number).padStart(4, "0")}
                     </span>
                     <StatusBadge status={t.status} />
+                    <span
+                      className="text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
+                      style={{ background: "#f6f6f6", color: "#072a3c", border: "1px solid #e8e6df" }}
+                    >
+                      {t.department_name}
+                    </span>
                   </div>
                   <p className="font-semibold text-sm truncate" style={{ color: "#111" }}>
                     {t.subject}

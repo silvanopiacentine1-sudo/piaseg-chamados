@@ -10,6 +10,12 @@ type User = {
   username: string;
   name: string;
   role: "franqueado" | "atendente" | "admin";
+  department: string | null;
+};
+
+type Department = {
+  id: string;
+  name: string;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -21,6 +27,7 @@ const ROLE_LABELS: Record<string, string> = {
 export default function AdminUsersPage() {
   const router = useRouter();
   const [users, setUsers] = useState<User[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -28,18 +35,29 @@ export default function AdminUsersPage() {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<User["role"]>("franqueado");
+  const [department, setDepartment] = useState("");
   const [saving, setSaving] = useState(false);
 
   const [editingUsername, setEditingUsername] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editPassword, setEditPassword] = useState("");
   const [editRole, setEditRole] = useState<User["role"]>("franqueado");
+  const [editDepartment, setEditDepartment] = useState("");
+
+  function departmentName(id: string | null): string {
+    return departments.find((d) => d.id === id)?.name ?? id ?? "";
+  }
 
   async function load() {
     setLoading(true);
     try {
-      const data = await apiJson<User[]>("/admin/users");
-      setUsers(data);
+      const [usersData, departmentsData] = await Promise.all([
+        apiJson<User[]>("/admin/users"),
+        apiJson<Department[]>("/departments"),
+      ]);
+      setUsers(usersData);
+      setDepartments(departmentsData);
+      if (!department && departmentsData.length > 0) setDepartment(departmentsData[0].id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível carregar os usuários.");
     } finally {
@@ -63,7 +81,7 @@ export default function AdminUsersPage() {
     try {
       await apiJson("/admin/users", {
         method: "POST",
-        body: JSON.stringify({ username, name, password, role }),
+        body: JSON.stringify({ username, name, password, role, department: role === "atendente" ? department : undefined }),
       });
       setUsername("");
       setName("");
@@ -82,6 +100,7 @@ export default function AdminUsersPage() {
     setEditName(u.name);
     setEditPassword("");
     setEditRole(u.role);
+    setEditDepartment(u.department ?? departments[0]?.id ?? "");
   }
 
   async function handleUpdate(e: React.FormEvent) {
@@ -92,7 +111,12 @@ export default function AdminUsersPage() {
     try {
       await apiJson(`/admin/users/${editingUsername}`, {
         method: "PUT",
-        body: JSON.stringify({ name: editName, password: editPassword || undefined, role: editRole }),
+        body: JSON.stringify({
+          name: editName,
+          password: editPassword || undefined,
+          role: editRole,
+          department: editRole === "atendente" ? editDepartment : undefined,
+        }),
       });
       setEditingUsername(null);
       await load();
@@ -164,10 +188,26 @@ export default function AdminUsersPage() {
               <option value="atendente">Atendente</option>
               <option value="admin">Administrador</option>
             </select>
+            {role === "atendente" && (
+              <select
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                required
+                className="px-3 py-2.5 rounded-lg border text-sm outline-none sm:col-span-2"
+                style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
+              >
+                {departments.length === 0 && <option value="">Cadastre um departamento primeiro</option>}
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || (role === "atendente" && departments.length === 0)}
             className="self-start px-5 py-2.5 rounded-lg text-white font-semibold text-sm disabled:opacity-60"
             style={{ background: "linear-gradient(135deg, #072a3c 0%, #123a52 100%)" }}
           >
@@ -213,6 +253,21 @@ export default function AdminUsersPage() {
                         <option value="atendente">Atendente</option>
                         <option value="admin">Administrador</option>
                       </select>
+                      {editRole === "atendente" && (
+                        <select
+                          value={editDepartment}
+                          onChange={(e) => setEditDepartment(e.target.value)}
+                          required
+                          className="px-3 py-2 rounded-lg border text-sm outline-none"
+                          style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
+                        >
+                          {departments.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                     <div className="flex gap-2">
                       <button
@@ -241,6 +296,7 @@ export default function AdminUsersPage() {
                       </p>
                       <p className="text-xs" style={{ color: "#777" }}>
                         {u.username} · {ROLE_LABELS[u.role]}
+                        {u.role === "atendente" ? ` · ${departmentName(u.department)}` : ""}
                       </p>
                     </div>
                     <div className="flex gap-2">

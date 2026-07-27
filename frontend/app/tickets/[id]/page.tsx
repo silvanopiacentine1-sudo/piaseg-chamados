@@ -18,19 +18,36 @@ type Message = {
   created_at: string;
 };
 
+type Rating = "ruim" | "bom" | "excelente";
+
 type TicketDetail = {
   id: string;
   number: number;
   subject: string;
   description: string;
   status: string;
+  department: string;
+  department_name: string;
   opened_by: string;
   opened_by_name: string;
   assigned_to: string | null;
   assigned_to_name: string | null;
   attachment: string | null;
   created_at: string;
+  rating: Rating | null;
+  rated_at: string | null;
   messages: Message[];
+};
+
+type Department = {
+  id: string;
+  name: string;
+};
+
+const RATING_LABELS: Record<Rating, string> = {
+  ruim: "Ruim",
+  bom: "Bom",
+  excelente: "Excelente",
 };
 
 function formatDate(iso: string): string {
@@ -48,6 +65,8 @@ export default function TicketDetailPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [redirectTo, setRedirectTo] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [replyText, setReplyText] = useState("");
@@ -72,6 +91,9 @@ export default function TicketDetailPage() {
       return;
     }
     load();
+    if (isStaff()) {
+      apiJson<Department[]>("/departments").then(setDepartments).catch(() => {});
+    }
   }, [load, router]);
 
   async function handleReply(e: React.FormEvent) {
@@ -113,6 +135,22 @@ export default function TicketDetailPage() {
     }
   }
 
+  async function handleRedirect() {
+    if (!redirectTo) return;
+    if (!confirm("Redirecionar este chamado para outro departamento?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiJson(`/tickets/${number}/redirect`, { method: "POST", body: JSON.stringify({ department: redirectTo }) });
+      setRedirectTo("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Não foi possível redirecionar o chamado.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleClose() {
     if (!confirm("Tem certeza que deseja encerrar este chamado?")) return;
     setBusy(true);
@@ -122,6 +160,19 @@ export default function TicketDetailPage() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível encerrar o chamado.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRate(rating: Rating) {
+    setBusy(true);
+    setError("");
+    try {
+      await apiJson(`/tickets/${number}/rating`, { method: "POST", body: JSON.stringify({ rating }) });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Não foi possível registrar sua avaliação.");
     } finally {
       setBusy(false);
     }
@@ -155,6 +206,7 @@ export default function TicketDetailPage() {
   const staff = isStaff();
   const closed = ticket.status === "encerrado";
   const myUsername = getUsername();
+  const otherDepartments = departments.filter((d) => d.id !== ticket.department);
 
   return (
     <main className="min-h-dvh flex flex-col" style={{ background: "#f6f6f6" }}>
@@ -174,7 +226,15 @@ export default function TicketDetailPage() {
                 {ticket.subject}
               </h1>
             </div>
-            <StatusBadge status={ticket.status} />
+            <div className="flex items-center gap-2">
+              <span
+                className="text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap"
+                style={{ background: "#f6f6f6", color: "#072a3c", border: "1px solid #e8e6df" }}
+              >
+                {ticket.department_name}
+              </span>
+              <StatusBadge status={ticket.status} />
+            </div>
           </div>
 
           <p className="text-xs" style={{ color: "#777" }}>
@@ -182,7 +242,7 @@ export default function TicketDetailPage() {
             {ticket.assigned_to_name ? ` · Atendido por ${ticket.assigned_to_name}` : staff ? " · Não atribuído" : ""}
           </p>
 
-          <div className="flex gap-3 mt-4 flex-wrap">
+          <div className="flex gap-3 mt-4 flex-wrap items-center">
             {staff && !ticket.assigned_to && !closed && (
               <button
                 onClick={handleAssignToMe}
@@ -202,6 +262,31 @@ export default function TicketDetailPage() {
               >
                 Encerrar chamado
               </button>
+            )}
+            {staff && !closed && otherDepartments.length > 0 && (
+              <div className="flex items-center gap-2">
+                <select
+                  value={redirectTo}
+                  onChange={(e) => setRedirectTo(e.target.value)}
+                  className="px-3 py-2 rounded-lg border text-xs outline-none"
+                  style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
+                >
+                  <option value="">Redirecionar para...</option>
+                  {otherDepartments.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleRedirect}
+                  disabled={busy || !redirectTo}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-60"
+                  style={{ color: "#072a3c", border: "1px solid #e8e6df" }}
+                >
+                  Redirecionar
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -258,10 +343,36 @@ export default function TicketDetailPage() {
               </button>
             </div>
           </form>
+        ) : !staff && !ticket.rating ? (
+          <div className="bg-white rounded-xl p-5 mt-4 text-center" style={{ border: "1px solid #e8e6df" }}>
+            <p className="text-sm font-semibold mb-4" style={{ color: "#072a3c" }}>
+              Como você avalia o atendimento deste chamado?
+            </p>
+            <div className="flex justify-center gap-3 flex-wrap">
+              {(["ruim", "bom", "excelente"] as Rating[]).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => handleRate(r)}
+                  disabled={busy}
+                  className="px-5 py-2.5 rounded-lg text-sm font-semibold disabled:opacity-60"
+                  style={{ color: "#072a3c", border: "1px solid #e8e6df" }}
+                >
+                  {RATING_LABELS[r]}
+                </button>
+              ))}
+            </div>
+          </div>
         ) : (
-          <p className="text-xs text-center mt-6" style={{ color: "#999" }}>
-            Este chamado está encerrado.
-          </p>
+          <div className="text-center mt-6">
+            <p className="text-xs" style={{ color: "#999" }}>
+              Este chamado está encerrado.
+            </p>
+            {ticket.rating && (
+              <p className="text-xs mt-1 font-semibold" style={{ color: "#a4854a" }}>
+                Avaliação do franqueado: {RATING_LABELS[ticket.rating]}
+              </p>
+            )}
+          </div>
         )}
       </div>
     </main>
