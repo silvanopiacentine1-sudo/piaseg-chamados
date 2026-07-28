@@ -77,6 +77,11 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _br_time(iso: str) -> str:
+    dt = datetime.fromisoformat(iso) - timedelta(hours=3)
+    return dt.strftime("%d/%m/%Y %H:%M")
+
+
 def _load_departments() -> list[dict]:
     if DEPARTMENTS_FILE.exists():
         return json.loads(DEPARTMENTS_FILE.read_text(encoding="utf-8"))
@@ -571,6 +576,7 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         "closed_by": None,
         "rating": None,
         "rated_at": None,
+        "transcript_sent_at": None,
     }
     _save_ticket(ticket)
 
@@ -743,3 +749,136 @@ def rate_ticket(number: int, body: RatingRequest, user: dict = Depends(get_curre
     ticket["rated_at"] = now_iso()
     _save_ticket(ticket)
     return ticket
+
+
+@app.post("/tickets/{number}/send-transcript")
+def send_transcript(number: int, user: dict = Depends(get_current_user)):
+    if user.get("role") != "franqueado":
+        raise HTTPException(status_code=403, detail="Apenas o franqueado que abriu o chamado pode solicitar o envio")
+
+    tickets = _load(TICKETS_FILE)
+    ticket = next((t for t in tickets if t["number"] == number), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    if ticket["opened_by"] != user["sub"]:
+        raise HTTPException(status_code=403, detail="Você não abriu este chamado")
+    if ticket["status"] != "encerrado":
+        raise HTTPException(status_code=409, detail="Só é possível enviar a conversa de um chamado encerrado")
+
+    entries = [(ticket["opened_by_name"], ticket["created_at"], ticket["description"])]
+    for m in _messages_for_ticket(ticket["id"]):
+        entries.append((m["author_name"], m["created_at"], m["text"] or "(anexo enviado)"))
+
+    rows_html = "".join(
+        f"<p style='margin:0 0 4px;'><strong>{name}</strong> — {_br_time(created_at)}</p>"
+        f"<p style='margin:0 0 16px; white-space:pre-wrap;'>{text}</p>"
+        for name, created_at, text in entries
+    )
+    html = f"""
+    <div style="font-family: Arial, Helvetica, sans-serif; max-width: 560px; margin: 0 auto;">
+      <div style="background:#072a3c; padding: 24px; text-align:center;">
+        <h1 style="color:#c2a360; font-size:20px; margin:0;">Piaseg Chamados</h1>
+      </div>
+      <div style="padding: 24px; color:#111;">
+        <h2 style="font-size:16px; margin:0 0 4px;">Chamado #{number:04d} — {ticket['subject']}</h2>
+        <p style="font-size:12px; color:#777; margin:0 0 24px;">Departamento: {ticket.get('department_name') or '—'}</p>
+        {rows_html}
+      </div>
+    </div>
+    """
+    try:
+        _send_email(user["sub"], f"Conversa do chamado #{number:04d} — {ticket['subject']}", html)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Não foi possível enviar o e-mail agora. Tente novamente em instantes.")
+
+    ticket["transcript_sent_at"] = now_iso()
+    _save_ticket(ticket)
+    return ticket
+
+
+# ---------------------------------------------------------------------------
+# SLA (admin)
+# ---------------------------------------------------------------------------
+
+def _minutes_between(start_iso: str, end_iso: str) -> float:
+    start = datetime.fromisoformat(start_iso)
+    end = datetime.fromisoformat(end_iso)
+    return (end - start).total_seconds() / 60
+
+
+@app.get("/admin/sla")
+def sla_report(user: dict = Depends(require_admin)):
+    tickets = _load(TICKETS_FILE)
+    messages = _load(MESSAGES_FILE)
+    messages_by_ticket: dict[str, list[dict]] = {}
+    for m in messages:
+        messages_by_ticket.setdefault(m["ticket_id"], []).append(m)
+
+    rows = []
+    for t in tickets:
+        msgs = sorted(messages_by_ticket.get(t["id"], []), key=lambda m: m["created_at"])
+        first_staff_msg = next((m for m in msgs if m.get("author_role") in ("atendente", "admin")), None)
+        first_response_minutes = _minutes_between(t["created_at"], first_staff_msg["created_at"]) if first_staff_msg else None
+        resolution_minutes = _minutes_between(t["created_at"], t["closed_at"]) if t.get("closed_at") else None
+        # Atribui pra quem realmente respondeu primeiro; sem resposta ainda, cai no assigned_to (se houver)
+        if first_staff_msg:
+            attributed_username = first_staff_msg["author"]
+            attributed_name = first_staff_msg["author_name"]
+        else:
+            attributed_username = t.get("assigned_to")
+            attributed_name = t.get("assigned_to_name")
+        rows.append({
+            "number": t["number"],
+            "subject": t["subject"],
+            "department_name": t.get("department_name"),
+            "assigned_to": attributed_username,
+            "assigned_to_name": attributed_name,
+            "status": t["status"],
+            "created_at": t["created_at"],
+            "first_response_minutes": first_response_minutes,
+            "resolution_minutes": resolution_minutes,
+        })
+
+    departments_by_id = {d["id"]: d["name"] for d in _load_departments()}
+    users_by_username = {u["username"]: u for u in auth.load_users()}
+
+    by_atendente: dict[str, dict] = {}
+    for row in rows:
+        key = row["assigned_to"] or "__unassigned__"
+        entry = by_atendente.setdefault(key, {
+            "username": row["assigned_to"],
+            "name": row["assigned_to_name"] or "Não atribuído",
+            "tickets_count": 0,
+            "closed_count": 0,
+            "_first_response_sum": 0.0,
+            "_first_response_count": 0,
+            "_resolution_sum": 0.0,
+            "_resolution_count": 0,
+        })
+        entry["tickets_count"] += 1
+        if row["status"] == "encerrado":
+            entry["closed_count"] += 1
+        if row["first_response_minutes"] is not None:
+            entry["_first_response_sum"] += row["first_response_minutes"]
+            entry["_first_response_count"] += 1
+        if row["resolution_minutes"] is not None:
+            entry["_resolution_sum"] += row["resolution_minutes"]
+            entry["_resolution_count"] += 1
+
+    summary = []
+    for entry in by_atendente.values():
+        username = entry["username"]
+        u = users_by_username.get(username) if username else None
+        department_name = departments_by_id.get(u.get("department")) if u else None
+        summary.append({
+            "username": username,
+            "name": entry["name"],
+            "department_name": department_name,
+            "tickets_count": entry["tickets_count"],
+            "closed_count": entry["closed_count"],
+            "avg_first_response_minutes": (entry["_first_response_sum"] / entry["_first_response_count"]) if entry["_first_response_count"] else None,
+            "avg_resolution_minutes": (entry["_resolution_sum"] / entry["_resolution_count"]) if entry["_resolution_count"] else None,
+        })
+    summary.sort(key=lambda s: (s["username"] is None, s["name"]))
+
+    return {"tickets": sorted(rows, key=lambda r: r["number"], reverse=True), "by_atendente": summary}

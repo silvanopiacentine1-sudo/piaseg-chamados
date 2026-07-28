@@ -165,8 +165,38 @@ export default function NewTicketPage() {
               type="file"
               accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.zip"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="w-full text-sm"
+              className="hidden"
             />
+            {file ? (
+              <div
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg"
+                style={{ border: "1px dashed #c2a360", background: "#faf7f0" }}
+              >
+                <span className="text-sm truncate" style={{ color: "#072a3c" }}>
+                  📎 {file.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFile(null);
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                  }}
+                  className="text-xs font-semibold shrink-0"
+                  style={{ color: "#b3261e" }}
+                >
+                  Remover
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-semibold cursor-pointer"
+                style={{ border: "2px dashed #e8e6df", color: "#072a3c", background: "#f6f6f6" }}
+              >
+                📎 Clique aqui para anexar um arquivo
+              </button>
+            )}
             <p className="text-xs" style={{ color: "#999" }}>
               PDF, imagem, Word, Excel ou ZIP — máximo 15MB.
             </p>

@@ -36,6 +36,7 @@ type TicketDetail = {
   created_at: string;
   rating: Rating | null;
   rated_at: string | null;
+  transcript_sent_at: string | null;
   messages: Message[];
 };
 
@@ -73,6 +74,7 @@ export default function TicketDetailPage() {
   const [replyFile, setReplyFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [transcriptDeclined, setTranscriptDeclined] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -173,6 +175,19 @@ export default function TicketDetailPage() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível registrar sua avaliação.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSendTranscript() {
+    setBusy(true);
+    setError("");
+    try {
+      await apiJson(`/tickets/${number}/send-transcript`, { method: "POST" });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Não foi possível enviar o e-mail.");
     } finally {
       setBusy(false);
     }
@@ -362,6 +377,30 @@ export default function TicketDetailPage() {
               ))}
             </div>
           </div>
+        ) : !staff && !ticket.transcript_sent_at && !transcriptDeclined ? (
+          <div className="bg-white rounded-xl p-5 mt-4 text-center" style={{ border: "1px solid #e8e6df" }}>
+            <p className="text-sm font-semibold mb-4" style={{ color: "#072a3c" }}>
+              Deseja enviar nossa conversa para seu e-mail?
+            </p>
+            <div className="flex justify-center gap-3 flex-wrap">
+              <button
+                onClick={handleSendTranscript}
+                disabled={busy}
+                className="px-5 py-2.5 rounded-lg text-white text-sm font-semibold disabled:opacity-60"
+                style={{ background: "linear-gradient(135deg, #072a3c 0%, #123a52 100%)" }}
+              >
+                Sim
+              </button>
+              <button
+                onClick={() => setTranscriptDeclined(true)}
+                disabled={busy}
+                className="px-5 py-2.5 rounded-lg text-sm font-semibold disabled:opacity-60"
+                style={{ color: "#072a3c", border: "1px solid #e8e6df" }}
+              >
+                Não
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="text-center mt-6">
             <p className="text-xs" style={{ color: "#999" }}>
@@ -370,6 +409,11 @@ export default function TicketDetailPage() {
             {ticket.rating && (
               <p className="text-xs mt-1 font-semibold" style={{ color: "#a4854a" }}>
                 Avaliação do franqueado: {RATING_LABELS[ticket.rating]}
+              </p>
+            )}
+            {ticket.transcript_sent_at && (
+              <p className="text-xs mt-1" style={{ color: "#a4854a" }}>
+                ✓ Conversa enviada para o seu e-mail.
               </p>
             )}
           </div>

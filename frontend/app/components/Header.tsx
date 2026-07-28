@@ -28,6 +28,9 @@ export default function Header() {
               <Link href="/admin/users" className="text-white/90 hover:text-white font-semibold">
                 Usuários
               </Link>
+              <Link href="/admin/sla" className="text-white/90 hover:text-white font-semibold">
+                SLA
+              </Link>
             </>
           )}
           {isStaff() && (
