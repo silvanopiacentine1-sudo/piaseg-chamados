@@ -882,3 +882,19 @@ def sla_report(user: dict = Depends(require_admin)):
     summary.sort(key=lambda s: (s["username"] is None, s["name"]))
 
     return {"tickets": sorted(rows, key=lambda r: r["number"], reverse=True), "by_atendente": summary}
+
+
+# ---------------------------------------------------------------------------
+# Manutenção (admin)
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/reset-tickets")
+def reset_tickets(user: dict = Depends(require_admin)):
+    """Apaga todos os chamados, mensagens e anexos. Reinicia a numeração do zero.
+    Não afeta usuários nem departamentos cadastrados."""
+    _save(TICKETS_FILE, [])
+    _save(MESSAGES_FILE, [])
+    for f in FILES_DIR.glob("*"):
+        if f.is_file():
+            f.unlink()
+    return {"ok": True}
