@@ -75,6 +75,7 @@ export default function TicketDetailPage() {
   const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [transcriptDeclined, setTranscriptDeclined] = useState(false);
+  const [transcriptSuccess, setTranscriptSuccess] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -186,6 +187,7 @@ export default function TicketDetailPage() {
     try {
       await apiJson(`/tickets/${number}/send-transcript`, { method: "POST" });
       await load();
+      setTranscriptSuccess(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível enviar o e-mail.");
     } finally {
@@ -307,6 +309,11 @@ export default function TicketDetailPage() {
         </div>
 
         {error && <p className="text-red-600 text-xs bg-red-50 rounded-lg py-2 px-3 mt-4">{error}</p>}
+        {transcriptSuccess && (
+          <p className="text-sm font-semibold text-center rounded-lg py-2.5 px-3 mt-4" style={{ color: "#1e7a4c", background: "#e8f3ec" }}>
+            ✓ Mensagem enviada com sucesso.
+          </p>
+        )}
 
         <div className="flex flex-col gap-3 mt-6">
           <MessageBubble
