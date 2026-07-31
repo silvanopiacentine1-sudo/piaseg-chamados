@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,7 @@ USERS_FILE = _data_dir / "users.json"
 _BUNDLED_USERS_FILE = _APP_DIR / "users.json"
 
 VALID_ROLES = {"franqueado", "atendente", "admin"}
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def load_users() -> list[dict]:
@@ -75,6 +77,10 @@ def create_user(username: str, name: str, password: str, role: str, department: 
         raise ValueError(f"role deve ser um de {sorted(VALID_ROLES)}")
     if role == "atendente" and not department:
         raise ValueError("department é obrigatório para usuários atendente")
+    if not EMAIL_RE.match(username):
+        raise ValueError("username deve ser um e-mail válido (ex: nome@piaseg.com.br)")
+    if not name.strip():
+        raise ValueError("name é obrigatório")
     users = load_users()
     if any(u["username"] == username for u in users):
         raise ValueError(f"Usuário '{username}' já existe")

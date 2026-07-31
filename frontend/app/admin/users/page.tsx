@@ -152,7 +152,7 @@ export default function AdminUsersPage() {
           </p>
           <div className="grid sm:grid-cols-2 gap-3">
             <input
-              type="text"
+              type="email"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="usuário (e-mail)"
