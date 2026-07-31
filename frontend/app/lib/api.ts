@@ -1,4 +1,4 @@
-import { getToken } from "./auth";
+import { getToken, logout } from "./auth";
 
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -16,6 +16,10 @@ export async function apiJson<T>(path: string, options: RequestInit = {}): Promi
   }
   const res = await apiFetch(path, { ...options, headers });
   if (!res.ok) {
+    if (res.status === 401) {
+      logout();
+      if (typeof window !== "undefined") window.location.href = "/?sessao_expirada=1";
+    }
     const data = await res.json().catch(() => ({}));
     throw new Error(data.detail ?? `Erro ${res.status}`);
   }

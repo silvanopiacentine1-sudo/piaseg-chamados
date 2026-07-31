@@ -10,7 +10,7 @@ from passlib.context import CryptContext
 
 SECRET_KEY = os.getenv("JWT_SECRET", "piaseg-chamados-secret")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_HOURS = 12
+ACCESS_TOKEN_EXPIRE_HOURS = 24 * 14  # 14 dias
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 

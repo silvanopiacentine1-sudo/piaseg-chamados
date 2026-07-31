@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { API } from "./lib/api";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sessionExpired = searchParams.get("sessao_expirada") === "1";
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -59,6 +61,12 @@ export default function LoginPage() {
           <p className="text-center text-xs mb-6 uppercase tracking-widest" style={{ color: "#a4854a" }}>
             Suporte a Franqueados
           </p>
+
+          {sessionExpired && (
+            <p className="text-xs text-center mb-4 bg-yellow-50 rounded-lg py-2 px-3" style={{ color: "#8a6d1f" }}>
+              Sua sessão expirou. Faça login novamente.
+            </p>
+          )}
 
           <form onSubmit={handleLogin} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
@@ -118,5 +126,13 @@ export default function LoginPage() {
         </p>
       </div>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   );
 }
