@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiJson } from "../lib/api";
-import { getRole, getToken, isStaff } from "../lib/auth";
+import { getToken, isStaff } from "../lib/auth";
 import Header from "../components/Header";
 import StatusBadge from "../components/StatusBadge";
 
@@ -65,15 +65,13 @@ export default function TicketsPage() {
           <h1 className="font-heading text-2xl" style={{ color: "#072a3c" }}>
             {staff ? "Chamados" : "Meus chamados"}
           </h1>
-          {getRole() === "franqueado" && (
-            <Link
-              href="/tickets/new"
-              className="px-5 py-2.5 rounded-lg text-white font-semibold text-sm"
-              style={{ background: "linear-gradient(135deg, #072a3c 0%, #123a52 100%)" }}
-            >
-              + Abrir chamado
-            </Link>
-          )}
+          <Link
+            href="/tickets/new"
+            className="px-5 py-2.5 rounded-lg text-white font-semibold text-sm"
+            style={{ background: "linear-gradient(135deg, #072a3c 0%, #123a52 100%)" }}
+          >
+            + Abrir chamado
+          </Link>
         </div>
 
         <div className="flex gap-2 mb-6 flex-wrap">

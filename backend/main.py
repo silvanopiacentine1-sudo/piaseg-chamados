@@ -280,12 +280,12 @@ def _require_ticket_access(ticket: dict, user: dict) -> None:
     role = user.get("role")
     if role == "admin":
         return
+    if ticket["opened_by"] == user["sub"]:
+        return
     if role == "atendente":
         if ticket.get("department") == user.get("department") or ticket.get("assigned_to") == user["sub"]:
             return
         raise HTTPException(status_code=403, detail="Este chamado não pertence ao seu departamento")
-    if ticket["opened_by"] == user["sub"]:
-        return
     raise HTTPException(status_code=403, detail="Você não tem acesso a este chamado")
 
 
@@ -532,7 +532,10 @@ def list_tickets(status_filter: Optional[str] = None, user: dict = Depends(get_c
     if role == "franqueado":
         tickets = [t for t in tickets if t["opened_by"] == user["sub"]]
     elif role == "atendente":
-        tickets = [t for t in tickets if t.get("department") == user.get("department") or t.get("assigned_to") == user["sub"]]
+        tickets = [
+            t for t in tickets
+            if t.get("department") == user.get("department") or t.get("assigned_to") == user["sub"] or t.get("opened_by") == user["sub"]
+        ]
     if status_filter:
         if status_filter not in STATUSES:
             raise HTTPException(status_code=400, detail=f"status deve ser um de {sorted(STATUSES)}")
@@ -542,8 +545,6 @@ def list_tickets(status_filter: Optional[str] = None, user: dict = Depends(get_c
 
 @app.post("/tickets", status_code=201)
 def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
-    if user.get("role") != "franqueado":
-        raise HTTPException(status_code=403, detail="Apenas franqueados podem abrir chamados")
     if not body.subject.strip() or not body.description.strip():
         raise HTTPException(status_code=400, detail="Assunto e descrição são obrigatórios")
     department = _department_or_404(body.department)
@@ -567,6 +568,7 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         "department_name": department["name"],
         "opened_by": user["sub"],
         "opened_by_name": user["name"],
+        "opened_by_role": user["role"],
         "assigned_to": assigned_to,
         "assigned_to_name": assigned_to_name,
         "attachment": body.attachment,
@@ -731,8 +733,6 @@ def close_ticket(number: int, user: dict = Depends(get_current_user)):
 
 @app.post("/tickets/{number}/rating")
 def rate_ticket(number: int, body: RatingRequest, user: dict = Depends(get_current_user)):
-    if user.get("role") != "franqueado":
-        raise HTTPException(status_code=403, detail="Apenas o franqueado que abriu o chamado pode avaliá-lo")
     if body.rating not in RATINGS:
         raise HTTPException(status_code=400, detail=f"rating deve ser um de {sorted(RATINGS)}")
 
@@ -753,9 +753,6 @@ def rate_ticket(number: int, body: RatingRequest, user: dict = Depends(get_curre
 
 @app.post("/tickets/{number}/send-transcript")
 def send_transcript(number: int, user: dict = Depends(get_current_user)):
-    if user.get("role") != "franqueado":
-        raise HTTPException(status_code=403, detail="Apenas o franqueado que abriu o chamado pode solicitar o envio")
-
     tickets = _load(TICKETS_FILE)
     ticket = next((t for t in tickets if t["number"] == number), None)
     if not ticket:
