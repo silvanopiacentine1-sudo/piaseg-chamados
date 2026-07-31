@@ -227,8 +227,8 @@ def _notify(to: str, title: str, body_lines: list[str], ticket_number: int) -> N
     """
     try:
         _send_email(to, f"[Chamado #{ticket_number:04d}] {title}", html)
-    except Exception:
-        pass  # notificação por e-mail é best-effort, não deve derrubar a operação
+    except Exception as e:
+        print(f"[email] falha ao notificar {to}: {type(e).__name__}: {e}")  # best-effort, não deve derrubar a operação
 
 
 def _notify_many(usernames: list[str], title: str, body_lines: list[str], ticket_number: int) -> None:
@@ -361,8 +361,8 @@ def forgot_password(body: ForgotPasswordRequest):
         """
         try:
             _send_email(user["username"], "Redefinição de senha — Piaseg Chamados", html)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[email] falha ao enviar redefinição de senha para {user['username']}: {type(e).__name__}: {e}")
     return {"message": "Se o usuário existir, enviamos um e-mail com instruções de redefinição."}
 
 
@@ -788,7 +788,8 @@ def send_transcript(number: int, user: dict = Depends(get_current_user)):
     """
     try:
         _send_email(user["sub"], f"Conversa do chamado #{number:04d} — {ticket['subject']}", html)
-    except Exception:
+    except Exception as e:
+        print(f"[email] falha ao enviar transcrição do chamado #{number} para {user['sub']}: {type(e).__name__}: {e}")
         raise HTTPException(status_code=502, detail="Não foi possível enviar o e-mail agora. Tente novamente em instantes.")
 
     ticket["transcript_sent_at"] = now_iso()
