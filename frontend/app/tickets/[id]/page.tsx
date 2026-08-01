@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiJson, downloadFile, uploadFile } from "../../lib/api";
 import { getToken, getUsername, isStaff } from "../../lib/auth";
+import { getPersonColor } from "../../lib/colors";
 import Header from "../../components/Header";
 import StatusBadge from "../../components/StatusBadge";
 
@@ -46,6 +47,11 @@ type Department = {
   name: string;
 };
 
+type StaffMember = {
+  username: string;
+  name: string;
+};
+
 const RATING_LABELS: Record<Rating, string> = {
   ruim: "Ruim",
   bom: "Bom",
@@ -68,6 +74,8 @@ export default function TicketDetailPage() {
 
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [deptStaff, setDeptStaff] = useState<StaffMember[]>([]);
+  const [assignTo, setAssignTo] = useState("");
   const [redirectTo, setRedirectTo] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -99,6 +107,11 @@ export default function TicketDetailPage() {
       apiJson<Department[]>("/departments").then(setDepartments).catch(() => {});
     }
   }, [load, router]);
+
+  useEffect(() => {
+    if (!ticket || !isStaff()) return;
+    apiJson<StaffMember[]>(`/departments/${ticket.department}/staff`).then(setDeptStaff).catch(() => {});
+  }, [ticket?.department]);
 
   async function handleReply(e: React.FormEvent) {
     e.preventDefault();
@@ -134,6 +147,21 @@ export default function TicketDetailPage() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Não foi possível atribuir o chamado.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAssignTo() {
+    if (!assignTo) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiJson(`/tickets/${number}/assign`, { method: "POST", body: JSON.stringify({ username: assignTo }) });
+      setAssignTo("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Não foi possível direcionar o chamado.");
     } finally {
       setBusy(false);
     }
@@ -226,6 +254,7 @@ export default function TicketDetailPage() {
   const myUsername = getUsername();
   const isOpener = ticket.opened_by === myUsername;
   const otherDepartments = departments.filter((d) => d.id !== ticket.department);
+  const colleagues = deptStaff.filter((s) => s.username !== myUsername && s.username !== ticket.assigned_to);
 
   return (
     <main className="min-h-dvh flex flex-col" style={{ background: "#f6f6f6" }}>
@@ -256,10 +285,20 @@ export default function TicketDetailPage() {
             </div>
           </div>
 
-          <p className="text-xs" style={{ color: "#777" }}>
-            Aberto por {ticket.opened_by_name} em {formatDate(ticket.created_at)}
-            {ticket.assigned_to_name ? ` · Atendido por ${ticket.assigned_to_name}` : staff ? " · Não atribuído" : ""}
-          </p>
+          <div className="flex items-center gap-1 text-xs flex-wrap" style={{ color: "#777" }}>
+            <span>
+              Aberto por {ticket.opened_by_name} em {formatDate(ticket.created_at)}
+            </span>
+            {ticket.assigned_to_name && ticket.assigned_to ? (
+              <span className="inline-flex items-center gap-1">
+                <span>·</span>
+                <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: getPersonColor(ticket.assigned_to) }} />
+                <span>Atendido por {ticket.assigned_to_name}</span>
+              </span>
+            ) : (
+              staff && <span>· Não atribuído</span>
+            )}
+          </div>
 
           <div className="flex gap-3 mt-4 flex-wrap items-center">
             {staff && !ticket.assigned_to && !closed && (
@@ -271,6 +310,31 @@ export default function TicketDetailPage() {
               >
                 Atribuir a mim
               </button>
+            )}
+            {staff && !closed && colleagues.length > 0 && (
+              <div className="flex items-center gap-2">
+                <select
+                  value={assignTo}
+                  onChange={(e) => setAssignTo(e.target.value)}
+                  className="px-3 py-2 rounded-lg border text-xs outline-none"
+                  style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
+                >
+                  <option value="">Direcionar para colega...</option>
+                  {colleagues.map((s) => (
+                    <option key={s.username} value={s.username}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleAssignTo}
+                  disabled={busy || !assignTo}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold disabled:opacity-60"
+                  style={{ color: "#072a3c", border: "1px solid #e8e6df" }}
+                >
+                  Direcionar
+                </button>
+              </div>
             )}
             {!closed && (
               <button

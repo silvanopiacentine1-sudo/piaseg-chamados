@@ -651,8 +651,8 @@ def assign_ticket(number: int, body: AssignRequest, user: dict = Depends(require
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
 
     target_username = body.username
-    if target_username and user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Apenas administradores podem atribuir chamados a terceiros")
+    if user["role"] == "atendente" and user.get("department") != ticket.get("department"):
+        raise HTTPException(status_code=403, detail="Este chamado não pertence ao seu departamento")
 
     if target_username:
         target_user = next((u for u in auth.load_users() if u["username"] == target_username), None)
@@ -663,8 +663,6 @@ def assign_ticket(number: int, body: AssignRequest, user: dict = Depends(require
         ticket["assigned_to"] = target_user["username"]
         ticket["assigned_to_name"] = target_user["name"]
     else:
-        if user["role"] == "atendente" and user.get("department") != ticket.get("department"):
-            raise HTTPException(status_code=403, detail="Este chamado não pertence ao seu departamento")
         ticket["assigned_to"] = user["sub"]
         ticket["assigned_to_name"] = user["name"]
 
@@ -672,6 +670,10 @@ def assign_ticket(number: int, body: AssignRequest, user: dict = Depends(require
         ticket["status"] = "em_andamento"
     ticket["updated_at"] = now_iso()
     _save_ticket(ticket)
+
+    if target_username and target_username != user["sub"]:
+        _notify(target_username, f"{user['name']} direcionou um chamado para você", [f"<strong>Assunto:</strong> {ticket['subject']}"], number)
+
     return ticket
 
 

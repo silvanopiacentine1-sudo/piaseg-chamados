@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiJson } from "../lib/api";
 import { getToken, isStaff } from "../lib/auth";
+import { getPersonColor } from "../lib/colors";
 import Header from "../components/Header";
 import StatusBadge from "../components/StatusBadge";
 
@@ -14,6 +15,7 @@ type Ticket = {
   status: string;
   department_name: string;
   opened_by_name: string;
+  assigned_to: string | null;
   assigned_to_name: string | null;
   created_at: string;
   updated_at: string;
@@ -128,12 +130,19 @@ export default function TicketsPage() {
                   <p className="font-semibold text-sm truncate" style={{ color: "#111" }}>
                     {t.subject}
                   </p>
-                  <p className="text-xs mt-1" style={{ color: "#777" }}>
-                    {staff ? `Aberto por ${t.opened_by_name}` : "Você"}
-                    {t.assigned_to_name ? ` · Atendido por ${t.assigned_to_name}` : staff ? " · Não atribuído" : ""}
-                    {" · "}
-                    {formatDate(t.updated_at)}
-                  </p>
+                  <div className="flex items-center gap-1 text-xs mt-1 flex-wrap" style={{ color: "#777" }}>
+                    <span>{staff ? `Aberto por ${t.opened_by_name}` : "Você"}</span>
+                    {t.assigned_to_name && t.assigned_to ? (
+                      <span className="inline-flex items-center gap-1">
+                        <span>·</span>
+                        <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: getPersonColor(t.assigned_to) }} />
+                        <span>Atendido por {t.assigned_to_name}</span>
+                      </span>
+                    ) : (
+                      staff && <span>· Não atribuído</span>
+                    )}
+                    <span>· {formatDate(t.updated_at)}</span>
+                  </div>
                 </div>
               </Link>
             ))}
