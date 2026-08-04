@@ -2,6 +2,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import smtplib
 import unicodedata
 import uuid
@@ -21,6 +22,22 @@ from pydantic import BaseModel
 load_dotenv()
 
 import auth
+
+# ---------------------------------------------------------------------------
+# Trava de segurança: no Render, DATA_DIR é obrigatório.
+#
+# Sem essa trava, se alguém um dia recriar o serviço no Render e esquecer de
+# configurar a env var DATA_DIR, o app subiria normalmente (sem erro nenhum)
+# escrevendo os dados dentro do próprio container em vez do disco persistente
+# — e tudo seria perdido silenciosamente no próximo deploy, sem nenhum aviso.
+# Preferível falhar alto (o deploy não sobe) a perder dados em silêncio.
+# ---------------------------------------------------------------------------
+if os.getenv("RENDER") and not os.getenv("DATA_DIR"):
+    raise RuntimeError(
+        "DATA_DIR não está configurado no Render. Isso faria o app gravar dados "
+        "fora do disco persistente, perdendo tudo no próximo deploy. Configure a "
+        "env var DATA_DIR=/data no serviço antes de tentar de novo."
+    )
 
 app = FastAPI(title="Piaseg Chamados")
 
@@ -45,6 +62,8 @@ MESSAGES_FILE = DATA_DIR / "messages.json"
 RESETS_FILE = DATA_DIR / "password_resets.json"
 DEPARTMENTS_FILE = DATA_DIR / "departments.json"
 _BUNDLED_DEPARTMENTS_FILE = APP_DIR / "departments.json"
+BACKUPS_DIR = DATA_DIR / "backups"
+MAX_BACKUPS = 30
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".xls", ".xlsx", ".zip"}
 MAX_FILE_SIZE = 15 * 1024 * 1024  # 15MB
@@ -75,6 +94,32 @@ def _save(path: Path, data: list) -> None:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_BACKUP_FILES = ["users.json", "departments.json", "tickets.json", "messages.json"]
+
+
+def _run_startup_backup() -> None:
+    """Tira um snapshot dos dados a cada subida do app (ou seja, a cada deploy).
+
+    Só roda quando DATA_DIR foi explicitamente configurado (produção), nunca
+    em desenvolvimento local — evita acumular lixo na pasta do projeto.
+    """
+    if not os.getenv("DATA_DIR"):
+        return
+    snapshot_dir = BACKUPS_DIR / datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    for filename in _BACKUP_FILES:
+        source = DATA_DIR / filename
+        if source.exists():
+            shutil.copy2(source, snapshot_dir / filename)
+
+    existing = sorted(p for p in BACKUPS_DIR.iterdir() if p.is_dir())
+    for old in existing[:-MAX_BACKUPS]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+_run_startup_backup()
 
 
 def _br_time(iso: str) -> str:
@@ -898,3 +943,30 @@ def reset_tickets(user: dict = Depends(require_admin)):
         if f.is_file():
             f.unlink()
     return {"ok": True}
+
+
+@app.get("/admin/backups")
+def list_backups(user: dict = Depends(require_admin)):
+    """Lista os snapshots disponíveis (um por deploy/reinício do app), mais recente primeiro."""
+    if not BACKUPS_DIR.exists():
+        return []
+    return sorted((p.name for p in BACKUPS_DIR.iterdir() if p.is_dir()), reverse=True)
+
+
+@app.post("/admin/backups/{name}/restore")
+def restore_backup(name: str, user: dict = Depends(require_admin)):
+    """Restaura usuários/departamentos/chamados/mensagens a partir de um snapshot.
+    Antes de restaurar, tira um novo snapshot do estado atual (por segurança)."""
+    if "/" in name or ".." in name:
+        raise HTTPException(status_code=400, detail="Nome de backup inválido")
+    snapshot_dir = BACKUPS_DIR / name
+    if not snapshot_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Backup não encontrado")
+
+    _run_startup_backup()
+
+    for filename in _BACKUP_FILES:
+        source = snapshot_dir / filename
+        if source.exists():
+            shutil.copy2(source, DATA_DIR / filename)
+    return {"ok": True, "restored_from": name}

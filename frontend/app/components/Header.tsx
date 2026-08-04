@@ -31,6 +31,9 @@ export default function Header() {
               <Link href="/admin/sla" className="text-white/90 hover:text-white font-semibold">
                 SLA
               </Link>
+              <Link href="/admin/backups" className="text-white/90 hover:text-white font-semibold">
+                Backups
+              </Link>
             </>
           )}
           {isStaff() && (
