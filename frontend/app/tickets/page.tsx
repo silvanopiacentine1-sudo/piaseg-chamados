@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiJson } from "../lib/api";
-import { getToken, isStaff } from "../lib/auth";
+import { getToken, getUsername, isStaff } from "../lib/auth";
 import { getPersonColor } from "../lib/colors";
 import Header from "../components/Header";
 import StatusBadge from "../components/StatusBadge";
@@ -34,7 +34,9 @@ export default function TicketsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState("");
+  const [mineOnly, setMineOnly] = useState(false);
   const [staff, setStaff] = useState(false);
+  const myUsername = getUsername();
 
   useEffect(() => {
     if (!getToken()) {
@@ -59,6 +61,8 @@ export default function TicketsPage() {
     return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
+  const visibleTickets = mineOnly ? tickets.filter((t) => t.assigned_to === myUsername) : tickets;
+
   return (
     <main className="min-h-dvh flex flex-col" style={{ background: "#f6f6f6" }}>
       <Header />
@@ -76,7 +80,7 @@ export default function TicketsPage() {
           </Link>
         </div>
 
-        <div className="flex gap-2 mb-6 flex-wrap">
+        <div className="flex gap-2 mb-3 flex-wrap">
           {FILTERS.map((f) => (
             <button
               key={f.value}
@@ -93,13 +97,40 @@ export default function TicketsPage() {
           ))}
         </div>
 
+        {staff && (
+          <div className="flex gap-2 mb-6 flex-wrap">
+            <button
+              onClick={() => setMineOnly(false)}
+              className="px-4 py-1.5 rounded-full text-xs font-semibold border cursor-pointer"
+              style={
+                !mineOnly
+                  ? { background: "#123a52", color: "white", borderColor: "#123a52" }
+                  : { background: "white", color: "#123a52", borderColor: "#e8e6df" }
+              }
+            >
+              Todos do departamento
+            </button>
+            <button
+              onClick={() => setMineOnly(true)}
+              className="px-4 py-1.5 rounded-full text-xs font-semibold border cursor-pointer"
+              style={
+                mineOnly
+                  ? { background: "#123a52", color: "white", borderColor: "#123a52" }
+                  : { background: "white", color: "#123a52", borderColor: "#e8e6df" }
+              }
+            >
+              Atribuídos a mim
+            </button>
+          </div>
+        )}
+
         {error && <p className="text-red-600 text-sm bg-red-50 rounded-lg py-2 px-3 mb-4">{error}</p>}
 
         {loading ? (
           <p className="text-sm" style={{ color: "#555" }}>
             Carregando...
           </p>
-        ) : tickets.length === 0 ? (
+        ) : visibleTickets.length === 0 ? (
           <div className="bg-white rounded-xl p-8 text-center" style={{ border: "1px solid #e8e6df" }}>
             <p className="text-sm" style={{ color: "#555" }}>
               Nenhum chamado encontrado.
@@ -107,7 +138,7 @@ export default function TicketsPage() {
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {tickets.map((t) => (
+            {visibleTickets.map((t) => (
               <Link
                 key={t.number}
                 href={`/tickets/${t.number}`}
