@@ -419,8 +419,36 @@ export default function TicketDetailPage() {
                 type="file"
                 accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.zip"
                 onChange={(e) => setReplyFile(e.target.files?.[0] ?? null)}
-                className="text-xs"
+                className="hidden"
               />
+              {replyFile ? (
+                <div
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
+                  style={{ border: "1px dashed #c2a360", background: "#faf7f0", color: "#072a3c" }}
+                >
+                  <span className="truncate max-w-[160px]">📎 {replyFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReplyFile(null);
+                      if (fileInputRef.current) fileInputRef.current.value = "";
+                    }}
+                    className="font-semibold shrink-0"
+                    style={{ color: "#b3261e" }}
+                  >
+                    Remover
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer"
+                  style={{ border: "1px dashed #e8e6df", color: "#072a3c", background: "#f6f6f6" }}
+                >
+                  📎 Anexar arquivo
+                </button>
+              )}
               <button
                 type="submit"
                 disabled={sending || (!replyText.trim() && !replyFile)}
