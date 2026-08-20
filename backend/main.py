@@ -217,6 +217,7 @@ class TicketCreate(BaseModel):
     description: str
     department: str
     assigned_to: Optional[str] = None
+    for_franqueado: Optional[str] = None
     attachment: Optional[str] = None
 
 
@@ -321,11 +322,19 @@ def _next_ticket_number() -> int:
     return max((t["number"] for t in tickets), default=0) + 1
 
 
+def _customer_username(ticket: dict) -> str:
+    """O 'dono' do chamado do ponto de vista do franqueado: normalmente quem abriu,
+    mas se um atendente abriu o chamado PARA um franqueado específico, é esse franqueado."""
+    return ticket.get("for_franqueado") or ticket["opened_by"]
+
+
 def _require_ticket_access(ticket: dict, user: dict) -> None:
     role = user.get("role")
     if role == "admin":
         return
     if ticket["opened_by"] == user["sub"]:
+        return
+    if ticket.get("for_franqueado") == user["sub"]:
         return
     if role == "atendente":
         if ticket.get("department") == user.get("department") or ticket.get("assigned_to") == user["sub"]:
@@ -494,6 +503,16 @@ def list_department_staff(department_id: str, user: dict = Depends(get_current_u
     return sorted(atendentes, key=lambda u: u["name"])
 
 
+@app.get("/franqueados")
+def list_franqueados(user: dict = Depends(require_staff)):
+    franqueados = [
+        {"username": u["username"], "name": u["name"]}
+        for u in auth.load_users()
+        if u.get("role") == "franqueado"
+    ]
+    return sorted(franqueados, key=lambda u: u["name"])
+
+
 @app.post("/admin/departments", status_code=201)
 def create_department(body: DepartmentCreate, user: dict = Depends(require_admin)):
     name = body.name.strip()
@@ -575,7 +594,7 @@ def list_tickets(status_filter: Optional[str] = None, user: dict = Depends(get_c
     tickets = _load(TICKETS_FILE)
     role = user.get("role")
     if role == "franqueado":
-        tickets = [t for t in tickets if t["opened_by"] == user["sub"]]
+        tickets = [t for t in tickets if t["opened_by"] == user["sub"] or t.get("for_franqueado") == user["sub"]]
     elif role == "atendente":
         tickets = [
             t for t in tickets
@@ -603,6 +622,17 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         assigned_to = target_user["username"]
         assigned_to_name = target_user["name"]
 
+    for_franqueado = None
+    for_franqueado_name = None
+    if body.for_franqueado:
+        if user["role"] not in ("atendente", "admin"):
+            raise HTTPException(status_code=403, detail="Apenas o time interno pode abrir um chamado para um franqueado")
+        target_franqueado = next((u for u in auth.load_users() if u["username"] == body.for_franqueado), None)
+        if not target_franqueado or target_franqueado.get("role") != "franqueado":
+            raise HTTPException(status_code=400, detail="Franqueado indicado não encontrado")
+        for_franqueado = target_franqueado["username"]
+        for_franqueado_name = target_franqueado["name"]
+
     ticket = {
         "id": f"tkt_{uuid.uuid4().hex[:8]}",
         "number": _next_ticket_number(),
@@ -614,6 +644,8 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         "opened_by": user["sub"],
         "opened_by_name": user["name"],
         "opened_by_role": user["role"],
+        "for_franqueado": for_franqueado,
+        "for_franqueado_name": for_franqueado_name,
         "assigned_to": assigned_to,
         "assigned_to_name": assigned_to_name,
         "attachment": body.attachment,
@@ -627,13 +659,21 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
     }
     _save_ticket(ticket)
 
-    recipients = list({assigned_to, *_admin_usernames()}) if assigned_to else _department_staff_usernames(department["id"])
-    _notify_many(
-        recipients,
-        f"Novo chamado de {user['name']} — {department['name']}",
-        [f"<strong>Assunto:</strong> {ticket['subject']}", ticket["description"]],
-        ticket["number"],
-    )
+    if for_franqueado:
+        _notify(
+            for_franqueado,
+            f"Novo chamado aberto por {user['name']} — {department['name']}",
+            [f"<strong>Assunto:</strong> {ticket['subject']}", ticket["description"]],
+            ticket["number"],
+        )
+    else:
+        recipients = list({assigned_to, *_admin_usernames()}) if assigned_to else _department_staff_usernames(department["id"])
+        _notify_many(
+            recipients,
+            f"Novo chamado de {user['name']} — {department['name']}",
+            [f"<strong>Assunto:</strong> {ticket['subject']}", ticket["description"]],
+            ticket["number"],
+        )
     return ticket
 
 
@@ -680,7 +720,7 @@ def add_message(number: int, body: MessageCreate, user: dict = Depends(get_curre
     _save_ticket(ticket)
 
     if is_staff:
-        _notify(ticket["opened_by"], f"Nova resposta de {user['name']}", [message["text"] or "(anexo enviado)"], number)
+        _notify(_customer_username(ticket), f"Nova resposta de {user['name']}", [message["text"] or "(anexo enviado)"], number)
     else:
         recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket.get("department"))
         _notify_many(recipients, f"Nova mensagem de {user['name']}", [message["text"] or "(anexo enviado)"], number)
@@ -770,7 +810,7 @@ def close_ticket(number: int, user: dict = Depends(get_current_user)):
 
     is_staff = user["role"] in ("atendente", "admin")
     if is_staff:
-        _notify(ticket["opened_by"], f"Chamado encerrado por {user['name']}", ["O chamado foi marcado como encerrado."], number)
+        _notify(_customer_username(ticket), f"Chamado encerrado por {user['name']}", ["O chamado foi marcado como encerrado."], number)
     else:
         recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket.get("department"))
         _notify_many(recipients, f"Chamado encerrado por {user['name']}", ["O franqueado encerrou o chamado."], number)
@@ -787,7 +827,7 @@ def rate_ticket(number: int, body: RatingRequest, user: dict = Depends(get_curre
     ticket = next((t for t in tickets if t["number"] == number), None)
     if not ticket:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
-    if ticket["opened_by"] != user["sub"]:
+    if _customer_username(ticket) != user["sub"]:
         raise HTTPException(status_code=403, detail="Você não abriu este chamado")
     if ticket["status"] != "encerrado":
         raise HTTPException(status_code=409, detail="Só é possível avaliar um chamado encerrado")
@@ -804,7 +844,7 @@ def send_transcript(number: int, user: dict = Depends(get_current_user)):
     ticket = next((t for t in tickets if t["number"] == number), None)
     if not ticket:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
-    if ticket["opened_by"] != user["sub"]:
+    if _customer_username(ticket) != user["sub"]:
         raise HTTPException(status_code=403, detail="Você não abriu este chamado")
     if ticket["status"] != "encerrado":
         raise HTTPException(status_code=409, detail="Só é possível enviar a conversa de um chamado encerrado")

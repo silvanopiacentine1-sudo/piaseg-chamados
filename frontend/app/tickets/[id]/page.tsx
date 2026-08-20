@@ -32,6 +32,8 @@ type TicketDetail = {
   opened_by: string;
   opened_by_name: string;
   opened_by_role: string | null;
+  for_franqueado: string | null;
+  for_franqueado_name: string | null;
   assigned_to: string | null;
   assigned_to_name: string | null;
   attachment: string | null;
@@ -252,7 +254,7 @@ export default function TicketDetailPage() {
   const staff = isStaff();
   const closed = ticket.status === "encerrado";
   const myUsername = getUsername();
-  const isOpener = ticket.opened_by === myUsername;
+  const isCustomer = ticket.opened_by === myUsername || ticket.for_franqueado === myUsername;
   const otherDepartments = departments.filter((d) => d.id !== ticket.department);
   const colleagues = deptStaff.filter((s) => s.username !== myUsername && s.username !== ticket.assigned_to);
 
@@ -287,7 +289,8 @@ export default function TicketDetailPage() {
 
           <div className="flex items-center gap-1 text-xs flex-wrap" style={{ color: "#777" }}>
             <span>
-              Aberto por {ticket.opened_by_name} em {formatDate(ticket.created_at)}
+              Aberto por {ticket.opened_by_name}
+              {ticket.for_franqueado_name ? ` para ${ticket.for_franqueado_name}` : ""} em {formatDate(ticket.created_at)}
             </span>
             {ticket.assigned_to_name && ticket.assigned_to ? (
               <span className="inline-flex items-center gap-1">
@@ -459,7 +462,7 @@ export default function TicketDetailPage() {
               </button>
             </div>
           </form>
-        ) : isOpener && !ticket.rating ? (
+        ) : isCustomer && !ticket.rating ? (
           <div className="bg-white rounded-xl p-5 mt-4 text-center" style={{ border: "1px solid #e8e6df" }}>
             <p className="text-sm font-semibold mb-4" style={{ color: "#072a3c" }}>
               Como você avalia o atendimento deste chamado?
@@ -478,7 +481,7 @@ export default function TicketDetailPage() {
               ))}
             </div>
           </div>
-        ) : isOpener && !ticket.transcript_sent_at && !transcriptDeclined ? (
+        ) : isCustomer && !ticket.transcript_sent_at && !transcriptDeclined ? (
           <div className="bg-white rounded-xl p-5 mt-4 text-center" style={{ border: "1px solid #e8e6df" }}>
             <p className="text-sm font-semibold mb-4" style={{ color: "#072a3c" }}>
               Deseja enviar nossa conversa para seu e-mail?
@@ -509,7 +512,7 @@ export default function TicketDetailPage() {
             </p>
             {ticket.rating && (
               <p className="text-xs mt-1 font-semibold" style={{ color: "#a4854a" }}>
-                Avaliação de {ticket.opened_by_name}: {RATING_LABELS[ticket.rating]}
+                Avaliação de {ticket.for_franqueado_name ?? ticket.opened_by_name}: {RATING_LABELS[ticket.rating]}
               </p>
             )}
             {ticket.transcript_sent_at && (

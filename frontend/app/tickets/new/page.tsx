@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiJson, uploadFile } from "../../lib/api";
-import { getToken } from "../../lib/auth";
+import { getToken, isStaff } from "../../lib/auth";
 import Header from "../../components/Header";
 
 type Department = {
@@ -12,6 +12,11 @@ type Department = {
 };
 
 type StaffMember = {
+  username: string;
+  name: string;
+};
+
+type Franqueado = {
   username: string;
   name: string;
 };
@@ -25,9 +30,12 @@ export default function NewTicketPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [assignedTo, setAssignedTo] = useState("");
+  const [franqueados, setFranqueados] = useState<Franqueado[]>([]);
+  const [forFranqueado, setForFranqueado] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const staffUser = isStaff();
 
   useEffect(() => {
     if (!getToken()) {
@@ -40,6 +48,10 @@ export default function NewTicketPage() {
         if (data.length > 0) setDepartment(data[0].id);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Não foi possível carregar os departamentos."));
+    if (staffUser) {
+      apiJson<Franqueado[]>("/franqueados").then(setFranqueados).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   useEffect(() => {
@@ -65,7 +77,14 @@ export default function NewTicketPage() {
       }
       const ticket = await apiJson<{ number: number }>("/tickets", {
         method: "POST",
-        body: JSON.stringify({ subject, description, department, assigned_to: assignedTo || undefined, attachment }),
+        body: JSON.stringify({
+          subject,
+          description,
+          department,
+          assigned_to: assignedTo || undefined,
+          for_franqueado: forFranqueado || undefined,
+          attachment,
+        }),
       });
       router.push(`/tickets/${ticket.number}`);
     } catch (e) {
@@ -138,6 +157,30 @@ export default function NewTicketPage() {
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {staffUser && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>
+                Abrir para o franqueado (opcional)
+              </label>
+              <select
+                value={forFranqueado}
+                onChange={(e) => setForFranqueado(e.target.value)}
+                className="w-full px-4 py-3 rounded-lg border text-sm outline-none"
+                style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
+              >
+                <option value="">Chamado interno (não é para um franqueado específico)</option>
+                {franqueados.map((f) => (
+                  <option key={f.username} value={f.username}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs" style={{ color: "#999" }}>
+                Se escolher um franqueado, só ele (além do time interno) vai ver e poder responder este chamado.
+              </p>
             </div>
           )}
 

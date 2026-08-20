@@ -14,7 +14,10 @@ type Ticket = {
   subject: string;
   status: string;
   department_name: string;
+  opened_by: string;
   opened_by_name: string;
+  for_franqueado: string | null;
+  for_franqueado_name: string | null;
   assigned_to: string | null;
   assigned_to_name: string | null;
   created_at: string;
@@ -162,7 +165,13 @@ export default function TicketsPage() {
                     {t.subject}
                   </p>
                   <div className="flex items-center gap-1 text-xs mt-1 flex-wrap" style={{ color: "#777" }}>
-                    <span>{staff ? `Aberto por ${t.opened_by_name}` : "Você"}</span>
+                    <span>
+                      {staff
+                        ? `Aberto por ${t.opened_by_name}${t.for_franqueado_name ? ` para ${t.for_franqueado_name}` : ""}`
+                        : t.opened_by === myUsername
+                          ? "Você"
+                          : `Aberto por ${t.opened_by_name} para você`}
+                    </span>
                     {t.assigned_to_name && t.assigned_to ? (
                       <span className="inline-flex items-center gap-1">
                         <span>·</span>
