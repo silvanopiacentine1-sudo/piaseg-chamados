@@ -447,10 +447,11 @@ def reset_password(body: ResetPasswordRequest):
 
 @app.get("/admin/users")
 def list_users(user: dict = Depends(require_admin)):
-    return [
+    users = [
         {"username": u["username"], "name": u["name"], "role": u.get("role", "franqueado"), "department": u.get("department")}
         for u in auth.load_users()
     ]
+    return sorted(users, key=lambda u: u["name"].lower())
 
 
 @app.post("/admin/users", status_code=201)
