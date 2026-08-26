@@ -295,6 +295,19 @@ def _admin_usernames() -> list[str]:
     return [u["username"] for u in auth.load_users() if u.get("role") == "admin"]
 
 
+def _current_staff_contact(ticket: dict) -> Optional[str]:
+    """A pessoa do time interno 'do lado de dentro' da conversa: quem está atribuído
+    ao chamado, ou, se ninguém se atribuiu ainda, quem foi o último do time interno
+    a responder. Usado pra notificar só as duas pessoas envolvidas, não o departamento
+    inteiro, uma vez que a conversa já começou."""
+    if ticket.get("assigned_to"):
+        return ticket["assigned_to"]
+    staff_messages = [m for m in _messages_for_ticket(ticket["id"]) if m.get("author_role") in ("atendente", "admin")]
+    if staff_messages:
+        return staff_messages[-1]["author"]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Ticket helpers
 # ---------------------------------------------------------------------------
@@ -723,7 +736,8 @@ def add_message(number: int, body: MessageCreate, user: dict = Depends(get_curre
     if is_staff:
         _notify(_customer_username(ticket), f"Nova resposta de {user['name']}", [message["text"] or "(anexo enviado)"], number)
     else:
-        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket.get("department"))
+        contact = _current_staff_contact(ticket)
+        recipients = [contact] if contact else _department_staff_usernames(ticket.get("department"))
         _notify_many(recipients, f"Nova mensagem de {user['name']}", [message["text"] or "(anexo enviado)"], number)
 
     return message
@@ -813,7 +827,8 @@ def close_ticket(number: int, user: dict = Depends(get_current_user)):
     if is_staff:
         _notify(_customer_username(ticket), f"Chamado encerrado por {user['name']}", ["O chamado foi marcado como encerrado."], number)
     else:
-        recipients = [ticket["assigned_to"]] if ticket["assigned_to"] else _department_staff_usernames(ticket.get("department"))
+        contact = _current_staff_contact(ticket)
+        recipients = [contact] if contact else _department_staff_usernames(ticket.get("department"))
         _notify_many(recipients, f"Chamado encerrado por {user['name']}", ["O franqueado encerrou o chamado."], number)
 
     return ticket
