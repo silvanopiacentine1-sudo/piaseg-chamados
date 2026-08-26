@@ -282,19 +282,6 @@ def _notify_many(usernames: list[str], title: str, body_lines: list[str], ticket
         _notify(u, title, body_lines, ticket_number)
 
 
-def _department_staff_usernames(department_id: str) -> list[str]:
-    users = auth.load_users()
-    return [
-        u["username"]
-        for u in users
-        if u.get("role") == "admin" or (u.get("role") == "atendente" and u.get("department") == department_id)
-    ]
-
-
-def _admin_usernames() -> list[str]:
-    return [u["username"] for u in auth.load_users() if u.get("role") == "admin"]
-
-
 def _current_staff_contact(ticket: dict) -> Optional[str]:
     """A pessoa do time interno 'do lado de dentro' da conversa: quem está atribuído
     ao chamado, ou, se ninguém se atribuiu ainda, quem foi o último do time interno
@@ -673,15 +660,8 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
     }
     _save_ticket(ticket)
 
-    if for_franqueado:
-        _notify(
-            for_franqueado,
-            f"Novo chamado aberto por {user['name']} — {department['name']}",
-            [f"<strong>Assunto:</strong> {ticket['subject']}", ticket["description"]],
-            ticket["number"],
-        )
-    else:
-        recipients = list({assigned_to, *_admin_usernames()}) if assigned_to else _department_staff_usernames(department["id"])
+    recipients = {r for r in (for_franqueado, assigned_to) if r}
+    if recipients:
         _notify_many(
             recipients,
             f"Novo chamado de {user['name']} — {department['name']}",
@@ -737,8 +717,8 @@ def add_message(number: int, body: MessageCreate, user: dict = Depends(get_curre
         _notify(_customer_username(ticket), f"Nova resposta de {user['name']}", [message["text"] or "(anexo enviado)"], number)
     else:
         contact = _current_staff_contact(ticket)
-        recipients = [contact] if contact else _department_staff_usernames(ticket.get("department"))
-        _notify_many(recipients, f"Nova mensagem de {user['name']}", [message["text"] or "(anexo enviado)"], number)
+        if contact:
+            _notify(contact, f"Nova mensagem de {user['name']}", [message["text"] or "(anexo enviado)"], number)
 
     return message
 
@@ -798,12 +778,8 @@ def redirect_ticket(number: int, body: RedirectRequest, user: dict = Depends(req
     ticket["updated_at"] = now_iso()
     _save_ticket(ticket)
 
-    _notify_many(
-        _department_staff_usernames(department["id"]),
-        f"Chamado redirecionado para {department['name']}",
-        [f"{user['name']} redirecionou este chamado para o seu departamento."],
-        number,
-    )
+    # Sem notificação aqui: o redirecionamento não direciona a uma pessoa específica
+    # (limpa assigned_to de propósito), então não há "envolvido" pra avisar por e-mail.
     return ticket
 
 
@@ -828,8 +804,8 @@ def close_ticket(number: int, user: dict = Depends(get_current_user)):
         _notify(_customer_username(ticket), f"Chamado encerrado por {user['name']}", ["O chamado foi marcado como encerrado."], number)
     else:
         contact = _current_staff_contact(ticket)
-        recipients = [contact] if contact else _department_staff_usernames(ticket.get("department"))
-        _notify_many(recipients, f"Chamado encerrado por {user['name']}", ["O franqueado encerrou o chamado."], number)
+        if contact:
+            _notify(contact, f"Chamado encerrado por {user['name']}", ["O franqueado encerrou o chamado."], number)
 
     return ticket
 
