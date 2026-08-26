@@ -38,6 +38,7 @@ type TicketDetail = {
   assigned_to_name: string | null;
   attachment: string | null;
   created_at: string;
+  closed_at: string | null;
   rating: Rating | null;
   rated_at: string | null;
   transcript_sent_at: string | null;
@@ -64,6 +65,17 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function formatDuration(fromIso: string, toMs: number): string {
+  const minutes = Math.max(0, Math.round((toMs - new Date(fromIso).getTime()) / 60000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours < 24) return `${hours}h ${rest}min`;
+  const days = Math.floor(hours / 24);
+  const restHours = hours % 24;
+  return `${days}d ${restHours}h`;
+}
+
 function attachmentLabel(filename: string): string {
   return filename.includes("_") ? filename.split("_").slice(1).join("_") : filename;
 }
@@ -87,6 +99,12 @@ export default function TicketDetailPage() {
   const [busy, setBusy] = useState(false);
   const [transcriptDeclined, setTranscriptDeclined] = useState(false);
   const [transcriptSuccess, setTranscriptSuccess] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -303,6 +321,10 @@ export default function TicketDetailPage() {
             )}
           </div>
 
+          <p className="text-xs font-semibold mt-2" style={{ color: "#a4854a" }}>
+            ⏱ {closed && ticket.closed_at ? `Encerrado em ${formatDuration(ticket.created_at, new Date(ticket.closed_at).getTime())} (tempo total)` : `Em aberto há ${formatDuration(ticket.created_at, now)}`}
+          </p>
+
           <div className="flex gap-3 mt-4 flex-wrap items-center">
             {staff && !ticket.assigned_to && !closed && (
               <button
@@ -393,7 +415,7 @@ export default function TicketDetailPage() {
             attachment={ticket.attachment}
             createdAt={ticket.created_at}
           />
-          {ticket.messages.map((m) => (
+          {ticket.messages.map((m, i) => (
             <MessageBubble
               key={m.id}
               authorName={m.author_name}
@@ -402,6 +424,7 @@ export default function TicketDetailPage() {
               text={m.text}
               attachment={m.attachment}
               createdAt={m.created_at}
+              previousCreatedAt={i === 0 ? ticket.created_at : ticket.messages[i - 1].created_at}
             />
           ))}
         </div>
@@ -534,6 +557,7 @@ function MessageBubble({
   text,
   attachment,
   createdAt,
+  previousCreatedAt,
 }: {
   authorName: string;
   authorRole: string;
@@ -541,6 +565,7 @@ function MessageBubble({
   text: string;
   attachment: string | null;
   createdAt: string;
+  previousCreatedAt?: string | null;
 }) {
   const staffAuthor = authorRole === "atendente" || authorRole === "admin";
   return (
@@ -553,9 +578,23 @@ function MessageBubble({
             : { background: "white", color: "#111", border: "1px solid #e8e6df" }
         }
       >
-        <p className="text-[11px] font-semibold uppercase tracking-wide mb-1" style={{ color: staffAuthor ? "#d6bd8a" : "#a4854a" }}>
-          {authorName}
-        </p>
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
+          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: staffAuthor ? "#d6bd8a" : "#a4854a" }}>
+            {authorName}
+          </p>
+          {previousCreatedAt && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
+              style={
+                staffAuthor
+                  ? { background: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.75)" }
+                  : { background: "#f6f6f6", color: "#999" }
+              }
+            >
+              ⏱ respondeu em {formatDuration(previousCreatedAt, new Date(createdAt).getTime())}
+            </span>
+          )}
+        </div>
         {text && <p className="text-sm whitespace-pre-wrap">{text}</p>}
         {attachment && (
           <button
