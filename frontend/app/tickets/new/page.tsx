@@ -32,7 +32,7 @@ export default function NewTicketPage() {
   const [assignedTo, setAssignedTo] = useState("");
   const [franqueados, setFranqueados] = useState<Franqueado[]>([]);
   const [forFranqueado, setForFranqueado] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const staffUser = isStaff();
@@ -65,16 +65,23 @@ export default function NewTicketPage() {
       .catch(() => setStaff([]));
   }, [department]);
 
+  function handleFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
+    setFiles((prev) => [...prev, ...selected]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
-      let attachment: string | undefined;
-      if (file) {
-        const uploaded = await uploadFile(file);
-        attachment = uploaded.filename;
-      }
+      const uploaded = await Promise.all(files.map((f) => uploadFile(f)));
+      const attachments = uploaded.map((u) => u.filename);
       const ticket = await apiJson<{ number: number }>("/tickets", {
         method: "POST",
         body: JSON.stringify({
@@ -83,7 +90,7 @@ export default function NewTicketPage() {
           department,
           assigned_to: assignedTo || undefined,
           for_franqueado: forFranqueado || undefined,
-          attachment,
+          attachments,
         }),
       });
       router.push(`/tickets/${ticket.number}`);
@@ -201,47 +208,49 @@ export default function NewTicketPage() {
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>
-              Anexo (opcional)
+              Anexos (opcional)
             </label>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.zip"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              multiple
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.zip"
+              onChange={handleFilesSelected}
               className="hidden"
             />
-            {file ? (
-              <div
-                className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg"
-                style={{ border: "1px dashed #c2a360", background: "#faf7f0" }}
-              >
-                <span className="text-sm truncate" style={{ color: "#072a3c" }}>
-                  📎 {file.name}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFile(null);
-                    if (fileInputRef.current) fileInputRef.current.value = "";
-                  }}
-                  className="text-xs font-semibold shrink-0"
-                  style={{ color: "#b3261e" }}
-                >
-                  Remover
-                </button>
+            {files.length > 0 && (
+              <div className="flex flex-col gap-2">
+                {files.map((f, i) => (
+                  <div
+                    key={`${f.name}-${i}`}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg"
+                    style={{ border: "1px dashed #c2a360", background: "#faf7f0" }}
+                  >
+                    <span className="text-sm truncate" style={{ color: "#072a3c" }}>
+                      📎 {f.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeFile(i)}
+                      className="text-xs font-semibold shrink-0"
+                      style={{ color: "#b3261e" }}
+                    >
+                      Remover
+                    </button>
+                  </div>
+                ))}
               </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-semibold cursor-pointer"
-                style={{ border: "2px dashed #e8e6df", color: "#072a3c", background: "#f6f6f6" }}
-              >
-                📎 Clique aqui para anexar um arquivo
-              </button>
             )}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full flex items-center justify-center gap-2 px-4 py-4 rounded-lg text-sm font-semibold cursor-pointer"
+              style={{ border: "2px dashed #e8e6df", color: "#072a3c", background: "#f6f6f6" }}
+            >
+              📎 {files.length > 0 ? "Anexar mais um arquivo" : "Clique aqui para anexar um arquivo"}
+            </button>
             <p className="text-xs" style={{ color: "#999" }}>
-              PDF, imagem, Word, Excel ou ZIP — máximo 15MB.
+              PDF, imagem, Word, Excel, PowerPoint, CSV ou ZIP — máximo 15MB por arquivo, até 10 anexos.
             </p>
           </div>
 

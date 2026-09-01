@@ -65,8 +65,13 @@ _BUNDLED_DEPARTMENTS_FILE = APP_DIR / "departments.json"
 BACKUPS_DIR = DATA_DIR / "backups"
 MAX_BACKUPS = 30
 
-ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".xls", ".xlsx", ".zip"}
-MAX_FILE_SIZE = 15 * 1024 * 1024  # 15MB
+ALLOWED_EXTENSIONS = {
+    ".pdf", ".jpg", ".jpeg", ".png",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv",
+    ".zip",
+}
+MAX_FILE_SIZE = 15 * 1024 * 1024  # 15MB por arquivo
+MAX_ATTACHMENTS_PER_SUBMIT = 10  # proteção contra upload acidental em massa
 
 RATINGS = {"ruim", "bom", "excelente"}
 
@@ -218,12 +223,12 @@ class TicketCreate(BaseModel):
     department: str
     assigned_to: Optional[str] = None
     for_franqueado: Optional[str] = None
-    attachment: Optional[str] = None
+    attachments: list[str] = []
 
 
 class MessageCreate(BaseModel):
     text: str
-    attachment: Optional[str] = None
+    attachments: list[str] = []
 
 
 class AssignRequest(BaseModel):
@@ -612,6 +617,8 @@ def list_tickets(status_filter: Optional[str] = None, user: dict = Depends(get_c
 def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
     if not body.subject.strip() or not body.description.strip():
         raise HTTPException(status_code=400, detail="Assunto e descrição são obrigatórios")
+    if len(body.attachments) > MAX_ATTACHMENTS_PER_SUBMIT:
+        raise HTTPException(status_code=400, detail=f"Máximo de {MAX_ATTACHMENTS_PER_SUBMIT} anexos por chamado")
     department = _department_or_404(body.department)
 
     assigned_to = None
@@ -649,7 +656,7 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         "for_franqueado_name": for_franqueado_name,
         "assigned_to": assigned_to,
         "assigned_to_name": assigned_to_name,
-        "attachment": body.attachment,
+        "attachments": body.attachments,
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "closed_at": None,
@@ -690,7 +697,9 @@ def add_message(number: int, body: MessageCreate, user: dict = Depends(get_curre
     _require_ticket_access(ticket, user)
     if ticket["status"] == "encerrado":
         raise HTTPException(status_code=409, detail="Chamado encerrado — não é possível enviar novas mensagens")
-    if not body.text.strip() and not body.attachment:
+    if len(body.attachments) > MAX_ATTACHMENTS_PER_SUBMIT:
+        raise HTTPException(status_code=400, detail=f"Máximo de {MAX_ATTACHMENTS_PER_SUBMIT} anexos por mensagem")
+    if not body.text.strip() and not body.attachments:
         raise HTTPException(status_code=400, detail="Envie um texto ou anexo")
 
     message = {
@@ -700,7 +709,7 @@ def add_message(number: int, body: MessageCreate, user: dict = Depends(get_curre
         "author_name": user["name"],
         "author_role": user["role"],
         "text": body.text.strip(),
-        "attachment": body.attachment,
+        "attachments": body.attachments,
         "created_at": now_iso(),
     }
     messages = _load(MESSAGES_FILE)
@@ -1002,3 +1011,33 @@ def restore_backup(name: str, user: dict = Depends(require_admin)):
         if source.exists():
             shutil.copy2(source, DATA_DIR / filename)
     return {"ok": True, "restored_from": name}
+
+
+@app.post("/admin/migrate-attachments")
+def migrate_attachments(user: dict = Depends(require_admin)):
+    """Migração pontual: converte o campo antigo 'attachment' (um único arquivo)
+    pro novo 'attachments' (lista), em chamados e mensagens já existentes.
+    Idempotente — rodar de novo não faz nada se já não houver mais o campo antigo."""
+    _run_startup_backup()
+
+    migrated_tickets = 0
+    tickets = _load(TICKETS_FILE)
+    for t in tickets:
+        if "attachment" in t:
+            old = t.pop("attachment")
+            if "attachments" not in t:
+                t["attachments"] = [old] if old else []
+            migrated_tickets += 1
+    _save(TICKETS_FILE, tickets)
+
+    migrated_messages = 0
+    messages = _load(MESSAGES_FILE)
+    for m in messages:
+        if "attachment" in m:
+            old = m.pop("attachment")
+            if "attachments" not in m:
+                m["attachments"] = [old] if old else []
+            migrated_messages += 1
+    _save(MESSAGES_FILE, messages)
+
+    return {"ok": True, "migrated_tickets": migrated_tickets, "migrated_messages": migrated_messages}

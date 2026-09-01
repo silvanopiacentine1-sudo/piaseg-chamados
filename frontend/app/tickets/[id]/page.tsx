@@ -15,7 +15,7 @@ type Message = {
   author_name: string;
   author_role: string;
   text: string;
-  attachment: string | null;
+  attachments: string[];
   created_at: string;
 };
 
@@ -36,7 +36,7 @@ type TicketDetail = {
   for_franqueado_name: string | null;
   assigned_to: string | null;
   assigned_to_name: string | null;
-  attachment: string | null;
+  attachments: string[];
   created_at: string;
   closed_at: string | null;
   rating: Rating | null;
@@ -94,7 +94,7 @@ export default function TicketDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [replyText, setReplyText] = useState("");
-  const [replyFile, setReplyFile] = useState<File | null>(null);
+  const [replyFiles, setReplyFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [transcriptDeclined, setTranscriptDeclined] = useState(false);
@@ -133,23 +133,30 @@ export default function TicketDetailPage() {
     apiJson<StaffMember[]>(`/departments/${ticket.department}/staff`).then(setDeptStaff).catch(() => {});
   }, [ticket?.department]);
 
+  function handleReplyFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
+    setReplyFiles((prev) => [...prev, ...selected]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removeReplyFile(index: number) {
+    setReplyFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function handleReply(e: React.FormEvent) {
     e.preventDefault();
-    if (!replyText.trim() && !replyFile) return;
+    if (!replyText.trim() && replyFiles.length === 0) return;
     setSending(true);
     setError("");
     try {
-      let attachment: string | undefined;
-      if (replyFile) {
-        const uploaded = await uploadFile(replyFile);
-        attachment = uploaded.filename;
-      }
+      const uploaded = await Promise.all(replyFiles.map((f) => uploadFile(f)));
+      const attachments = uploaded.map((u) => u.filename);
       await apiJson(`/tickets/${number}/messages`, {
         method: "POST",
-        body: JSON.stringify({ text: replyText, attachment }),
+        body: JSON.stringify({ text: replyText, attachments }),
       });
       setReplyText("");
-      setReplyFile(null);
+      setReplyFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await load();
     } catch (e) {
@@ -412,7 +419,7 @@ export default function TicketDetailPage() {
             authorRole={ticket.opened_by_role ?? "franqueado"}
             mine={ticket.opened_by === myUsername}
             text={ticket.description}
-            attachment={ticket.attachment}
+            attachments={ticket.attachments}
             createdAt={ticket.created_at}
           />
           {ticket.messages.map((m, i) => (
@@ -422,7 +429,7 @@ export default function TicketDetailPage() {
               authorRole={m.author_role}
               mine={m.author === myUsername}
               text={m.text}
-              attachment={m.attachment}
+              attachments={m.attachments}
               createdAt={m.created_at}
               previousCreatedAt={i === 0 ? ticket.created_at : ticket.messages[i - 1].created_at}
             />
@@ -439,45 +446,47 @@ export default function TicketDetailPage() {
               className="w-full px-4 py-3 rounded-lg border text-sm outline-none resize-y"
               style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
             />
-            <div className="flex items-center justify-between gap-3 flex-wrap">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.zip"
-                onChange={(e) => setReplyFile(e.target.files?.[0] ?? null)}
-                className="hidden"
-              />
-              {replyFile ? (
-                <div
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
-                  style={{ border: "1px dashed #c2a360", background: "#faf7f0", color: "#072a3c" }}
-                >
-                  <span className="truncate max-w-[160px]">📎 {replyFile.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReplyFile(null);
-                      if (fileInputRef.current) fileInputRef.current.value = "";
-                    }}
-                    className="font-semibold shrink-0"
-                    style={{ color: "#b3261e" }}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.zip"
+              onChange={handleReplyFilesSelected}
+              className="hidden"
+            />
+            {replyFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {replyFiles.map((f, i) => (
+                  <div
+                    key={`${f.name}-${i}`}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
+                    style={{ border: "1px dashed #c2a360", background: "#faf7f0", color: "#072a3c" }}
                   >
-                    Remover
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer"
-                  style={{ border: "1px dashed #e8e6df", color: "#072a3c", background: "#f6f6f6" }}
-                >
-                  📎 Anexar arquivo
-                </button>
-              )}
+                    <span className="truncate max-w-[160px]">📎 {f.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeReplyFile(i)}
+                      className="font-semibold shrink-0"
+                      style={{ color: "#b3261e" }}
+                    >
+                      Remover
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer"
+                style={{ border: "1px dashed #e8e6df", color: "#072a3c", background: "#f6f6f6" }}
+              >
+                📎 {replyFiles.length > 0 ? "Anexar mais um arquivo" : "Anexar arquivo"}
+              </button>
               <button
                 type="submit"
-                disabled={sending || (!replyText.trim() && !replyFile)}
+                disabled={sending || (!replyText.trim() && replyFiles.length === 0)}
                 className="px-5 py-2.5 rounded-lg text-white font-semibold text-sm disabled:opacity-60"
                 style={{ background: "linear-gradient(135deg, #072a3c 0%, #123a52 100%)" }}
               >
@@ -555,7 +564,7 @@ function MessageBubble({
   authorRole,
   mine,
   text,
-  attachment,
+  attachments,
   createdAt,
   previousCreatedAt,
 }: {
@@ -563,7 +572,7 @@ function MessageBubble({
   authorRole: string;
   mine: boolean;
   text: string;
-  attachment: string | null;
+  attachments: string[];
   createdAt: string;
   previousCreatedAt?: string | null;
 }) {
@@ -596,14 +605,19 @@ function MessageBubble({
           )}
         </div>
         {text && <p className="text-sm whitespace-pre-wrap">{text}</p>}
-        {attachment && (
-          <button
-            onClick={() => downloadFile(`/files/${attachment}`, attachmentLabel(attachment))}
-            className="text-xs underline mt-2 block"
-            style={{ color: staffAuthor ? "#d6bd8a" : "#a4854a" }}
-          >
-            📎 {attachmentLabel(attachment)}
-          </button>
+        {attachments.length > 0 && (
+          <div className="flex flex-col gap-1 mt-2">
+            {attachments.map((attachment) => (
+              <button
+                key={attachment}
+                onClick={() => downloadFile(`/files/${attachment}`, attachmentLabel(attachment))}
+                className="text-xs underline text-left"
+                style={{ color: staffAuthor ? "#d6bd8a" : "#a4854a" }}
+              >
+                📎 {attachmentLabel(attachment)}
+              </button>
+            ))}
+          </div>
         )}
         <p className="text-[11px] mt-2" style={{ color: staffAuthor ? "rgba(255,255,255,0.6)" : "#999" }}>
           {formatDate(createdAt)}
