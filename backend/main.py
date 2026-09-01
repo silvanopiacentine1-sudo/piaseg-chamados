@@ -1012,32 +1012,3 @@ def restore_backup(name: str, user: dict = Depends(require_admin)):
             shutil.copy2(source, DATA_DIR / filename)
     return {"ok": True, "restored_from": name}
 
-
-@app.post("/admin/migrate-attachments")
-def migrate_attachments(user: dict = Depends(require_admin)):
-    """Migração pontual: converte o campo antigo 'attachment' (um único arquivo)
-    pro novo 'attachments' (lista), em chamados e mensagens já existentes.
-    Idempotente — rodar de novo não faz nada se já não houver mais o campo antigo."""
-    _run_startup_backup()
-
-    migrated_tickets = 0
-    tickets = _load(TICKETS_FILE)
-    for t in tickets:
-        if "attachment" in t:
-            old = t.pop("attachment")
-            if "attachments" not in t:
-                t["attachments"] = [old] if old else []
-            migrated_tickets += 1
-    _save(TICKETS_FILE, tickets)
-
-    migrated_messages = 0
-    messages = _load(MESSAGES_FILE)
-    for m in messages:
-        if "attachment" in m:
-            old = m.pop("attachment")
-            if "attachments" not in m:
-                m["attachments"] = [old] if old else []
-            migrated_messages += 1
-    _save(MESSAGES_FILE, messages)
-
-    return {"ok": True, "migrated_tickets": migrated_tickets, "migrated_messages": migrated_messages}
