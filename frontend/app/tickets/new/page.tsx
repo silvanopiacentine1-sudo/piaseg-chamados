@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiJson, uploadFile } from "../../lib/api";
 import { getToken, isStaff } from "../../lib/auth";
+import { FormatToolbar } from "../../lib/richText";
 import Header from "../../components/Header";
 
 type Department = {
@@ -24,6 +25,7 @@ type Franqueado = {
 export default function NewTicketPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const descriptionTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [department, setDepartment] = useState("");
@@ -192,10 +194,14 @@ export default function NewTicketPage() {
           )}
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>
-              Descrição
-            </label>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>
+                Descrição
+              </label>
+              <FormatToolbar textareaRef={descriptionTextareaRef} value={description} setValue={setDescription} />
+            </div>
             <textarea
+              ref={descriptionTextareaRef}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Descreva sua solicitação com detalhes"

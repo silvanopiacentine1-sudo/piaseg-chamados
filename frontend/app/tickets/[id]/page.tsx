@@ -6,6 +6,7 @@ import Link from "next/link";
 import { apiJson, downloadFile, uploadFile } from "../../lib/api";
 import { getToken, getUsername, isStaff } from "../../lib/auth";
 import { getPersonColor } from "../../lib/colors";
+import { FormatToolbar, renderFormattedText } from "../../lib/richText";
 import Header from "../../components/Header";
 import StatusBadge from "../../components/StatusBadge";
 
@@ -85,6 +86,7 @@ export default function TicketDetailPage() {
   const number = Number(params.id);
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const replyTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -438,7 +440,9 @@ export default function TicketDetailPage() {
 
         {!closed ? (
           <form onSubmit={handleReply} className="bg-white rounded-xl p-4 mt-4 flex flex-col gap-3" style={{ border: "1px solid #e8e6df" }}>
+            <FormatToolbar textareaRef={replyTextareaRef} value={replyText} setValue={setReplyText} />
             <textarea
+              ref={replyTextareaRef}
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
               placeholder="Escreva uma mensagem..."
@@ -604,7 +608,7 @@ function MessageBubble({
             </span>
           )}
         </div>
-        {text && <p className="text-sm whitespace-pre-wrap">{text}</p>}
+        {text && <p className="text-sm whitespace-pre-wrap">{renderFormattedText(text)}</p>}
         {attachments.length > 0 && (
           <div className="flex flex-col gap-1 mt-2">
             {attachments.map((attachment) => (
