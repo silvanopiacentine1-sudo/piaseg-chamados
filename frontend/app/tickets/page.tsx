@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { apiJson } from "../lib/api";
-import { getToken, getUsername, isStaff } from "../lib/auth";
+import { getToken, getUsername, isAdmin, isStaff } from "../lib/auth";
 import { getPersonColor } from "../lib/colors";
 import Header from "../components/Header";
 import StatusBadge from "../components/StatusBadge";
@@ -24,6 +24,13 @@ type Ticket = {
   updated_at: string;
 };
 
+type UserSummary = {
+  username: string;
+  name: string;
+  role: "franqueado" | "atendente" | "admin";
+  department: string | null;
+};
+
 const FILTERS = [
   { value: "", label: "Todos" },
   { value: "aberto", label: "Abertos" },
@@ -39,6 +46,11 @@ export default function TicketsPage() {
   const [filter, setFilter] = useState("");
   const [mineOnly, setMineOnly] = useState(false);
   const [staff, setStaff] = useState(false);
+  const [admin, setAdmin] = useState(false);
+  const [franqueadoFilter, setFranqueadoFilter] = useState("");
+  const [funcionarioFilter, setFuncionarioFilter] = useState("");
+  const [franqueadosList, setFranqueadosList] = useState<UserSummary[]>([]);
+  const [funcionariosList, setFuncionariosList] = useState<UserSummary[]>([]);
   const myUsername = getUsername();
 
   useEffect(() => {
@@ -47,6 +59,15 @@ export default function TicketsPage() {
       return;
     }
     setStaff(isStaff());
+    setAdmin(isAdmin());
+    if (isAdmin()) {
+      apiJson<UserSummary[]>("/admin/users")
+        .then((users) => {
+          setFranqueadosList(users.filter((u) => u.role === "franqueado"));
+          setFuncionariosList(users.filter((u) => u.role === "atendente" || u.role === "admin"));
+        })
+        .catch(() => {});
+    }
   }, [router]);
 
   useEffect(() => {
@@ -64,7 +85,10 @@ export default function TicketsPage() {
     return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
-  const visibleTickets = mineOnly ? tickets.filter((t) => t.assigned_to === myUsername) : tickets;
+  const visibleTickets = tickets
+    .filter((t) => (mineOnly ? t.assigned_to === myUsername : true))
+    .filter((t) => (franqueadoFilter ? t.opened_by === franqueadoFilter || t.for_franqueado === franqueadoFilter : true))
+    .filter((t) => (funcionarioFilter ? t.assigned_to === funcionarioFilter : true));
 
   return (
     <main className="min-h-dvh flex flex-col" style={{ background: "#f6f6f6" }}>
@@ -124,6 +148,49 @@ export default function TicketsPage() {
             >
               Atribuídos a mim
             </button>
+          </div>
+        )}
+
+        {admin && (
+          <div className="flex gap-3 mb-6 flex-wrap">
+            <select
+              value={franqueadoFilter}
+              onChange={(e) => setFranqueadoFilter(e.target.value)}
+              className="px-3 py-2 rounded-lg border text-xs font-semibold outline-none cursor-pointer"
+              style={{ borderColor: "#e8e6df", background: "white", color: "#072a3c" }}
+            >
+              <option value="">Todos os franqueados</option>
+              {franqueadosList.map((f) => (
+                <option key={f.username} value={f.username}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={funcionarioFilter}
+              onChange={(e) => setFuncionarioFilter(e.target.value)}
+              className="px-3 py-2 rounded-lg border text-xs font-semibold outline-none cursor-pointer"
+              style={{ borderColor: "#e8e6df", background: "white", color: "#072a3c" }}
+            >
+              <option value="">Todos os funcionários</option>
+              {funcionariosList.map((f) => (
+                <option key={f.username} value={f.username}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            {(franqueadoFilter || funcionarioFilter) && (
+              <button
+                onClick={() => {
+                  setFranqueadoFilter("");
+                  setFuncionarioFilter("");
+                }}
+                className="px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer"
+                style={{ color: "#b3261e" }}
+              >
+                Limpar filtro
+              </button>
+            )}
           </div>
         )}
 
