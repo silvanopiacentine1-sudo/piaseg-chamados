@@ -151,22 +151,40 @@ export default function NewTicketPage() {
           {staff.length > 0 && (
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold uppercase tracking-wider" style={{ color: "#072a3c" }}>
-                Direcionar para
+                Direcionar para {!staffUser && <span style={{ color: "#b3261e" }}>*</span>}
               </label>
               <select
                 value={assignedTo}
                 onChange={(e) => setAssignedTo(e.target.value)}
+                required={!staffUser}
                 className="w-full px-4 py-3 rounded-lg border text-sm outline-none"
                 style={{ borderColor: "#e8e6df", background: "#f6f6f6", color: "#111" }}
               >
-                <option value="">Qualquer pessoa do departamento</option>
+                {staffUser ? (
+                  <option value="">Qualquer pessoa do departamento</option>
+                ) : (
+                  <option value="" disabled>
+                    Selecione um atendente
+                  </option>
+                )}
                 {staff.map((s) => (
                   <option key={s.username} value={s.username}>
                     {s.name}
                   </option>
                 ))}
               </select>
+              {!staffUser && (
+                <p className="text-xs" style={{ color: "#999" }}>
+                  Escolha quem deve atender, assim a pessoa é avisada por e-mail na hora.
+                </p>
+              )}
             </div>
+          )}
+
+          {!staffUser && department && staff.length === 0 && (
+            <p className="text-xs rounded-lg px-3 py-2" style={{ color: "#b3261e", background: "#fdeceb" }}>
+              Este departamento ainda não tem nenhum atendente cadastrado — fale com o administrador antes de abrir o chamado.
+            </p>
           )}
 
           {staffUser && (
@@ -265,7 +283,7 @@ export default function NewTicketPage() {
           <div className="flex gap-3 mt-2">
             <button
               type="submit"
-              disabled={loading || !department}
+              disabled={loading || !department || (!staffUser && (staff.length === 0 || !assignedTo))}
               className="px-6 py-3 rounded-lg text-white font-semibold text-sm disabled:opacity-60"
               style={{ background: "linear-gradient(135deg, #072a3c 0%, #123a52 100%)" }}
             >

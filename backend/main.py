@@ -621,6 +621,9 @@ def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail=f"Máximo de {MAX_ATTACHMENTS_PER_SUBMIT} anexos por chamado")
     department = _department_or_404(body.department)
 
+    if user["role"] == "franqueado" and not body.assigned_to:
+        raise HTTPException(status_code=400, detail="Selecione o atendente para quem o chamado deve ser direcionado")
+
     assigned_to = None
     assigned_to_name = None
     if body.assigned_to:
